@@ -5,10 +5,7 @@ Pod::Spec.new do |s|
   s.description    = 'A sample project description'
   s.author         = ''
   s.homepage       = 'https://docs.expo.dev/modules/'
-  s.platforms      = {
-    :ios => '16.4',
-    :tvos => '16.4'
-  }
+  s.platforms      = { :ios => '26.0' }
   s.source         = { git: '' }
   s.static_framework = true
 
@@ -21,4 +18,11 @@ Pod::Spec.new do |s|
   }
 
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
+  s.exclude_files = "Tests/**/*"
+
+  s.test_spec 'Tests' do |test_spec|
+    test_spec.source_files = "Tests/**/*.swift"
+    # React Native's static C++ pods are linked transitively.
+    test_spec.libraries = "c++"
+  end
 end

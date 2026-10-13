@@ -1,3 +1,7 @@
+## Development
+
+Bun only, iOS 26 only. Install, prebuild, launch, and native test commands plus toolchain pins: `docs/development.md`.
+
 ## Agent skills
 
 ### Issue tracker

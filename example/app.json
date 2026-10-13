@@ -3,25 +3,15 @@
     "name": "expo-native-collaborative-editor-example",
     "slug": "expo-native-collaborative-editor-example",
     "version": "1.0.0",
+    "platforms": ["ios"],
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "expo.modules.nativecollaborativeeditor.example"
+      "bundleIdentifier": "expo.modules.nativecollaborativeeditor.example",
+      "deploymentTarget": "26.0"
     },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false,
-      "package": "expo.modules.nativecollaborativeeditor.example"
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": ["./plugins/withNativeTests"]
   }
 }
