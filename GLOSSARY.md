@@ -20,6 +20,10 @@ An explicit local action that sets a parent checklist item and its currently kno
 **Editing surface**:
 A presentation through which someone reads or edits a document, such as a full note, compact composer, or read-only view. The surface is not the document itself.
 
+**Document session**:
+An open document on one device, shared by every editing surface that presents it. It holds the document's undo history and unsaved input from opening until the host closes it or the app terminates.
+_Avoid_: Session (unqualified; an authentication session belongs to the host application), editor session
+
 **Feature plugin**:
 A selectable editor extension that supplies a feature's controls, behavior, or host-data integration. It is distinct from a sync adapter.
 
