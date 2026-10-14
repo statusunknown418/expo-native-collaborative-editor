@@ -37,7 +37,17 @@ Packaging findings:
 - SwiftYrs's `Package.swift` declares SQLite.swift and stream-video-swift-webrtc for its other products, so resolution downloads them even though only the `SwiftYrs` product links. On disk after resolution: StreamWebRTC artifact 95 MB, `YrsBridgeFFI` artifact 62 MB (all slices). Neither the WebRTC nor the SQLite.swift code reaches the app.
 - SwiftYrs exports a class named `Observation`, which shadows the `Observation` module in files that import SwiftYrs, so the `@Observable` macro fails to expand there. `DocumentSession` uses `ObservableObject` instead.
 - Yrs text offsets are UTF-16 code units (SwiftYrs ADR 0023 creates every document with `OffsetKind::Utf16`). `TextEdit` converts Swift `String` indices to those offsets explicitly, and `DocumentSessionTests` show emoji modifiers, ZWJ sequences, combining marks, and canonically equivalent clusters are replaced as whole grapheme clusters.
-- The cross-language half of the candidate (Yjs decoding the same bytes) is #4.
+- The cross-language half of the candidate (Yjs decoding the same bytes): see [Cross-language fixtures](#cross-language-fixtures-g2-4).
+
+## Cross-language fixtures (G2, #4)
+
+Scope: text. The corpus (`fixtures/corpus.json`) covers emoji (skin-tone modifiers, flags, a keycap), ZWJ sequences, combining marks (including a change between canonically equivalent NFD and NFC text), CJK (including a supplementary-plane character), right-to-left Hebrew and Arabic with a directional mark, deleted content followed by insertion at the deletion point, and deletion-only updates ending in an empty document. Marks, lists, checklist states, record references, and the unknown-feature document join the corpus with their tickets.
+
+Result: **pass** for text. Yjs 13.6.33 decodes every update a SwiftYrs 0.7.0 `DocumentSession` committed, and SwiftYrs decodes every update Yjs produced, to identical semantic snapshots after every step; replaying any update changes nothing. Command and layout: [`docs/development.md`](development.md#cross-language-fixtures).
+
+- Steps that edit after surrogate-pair characters (emoji, `𠮷`) decode identically, so the engines agree on item lengths; no fixture needed a conversion beyond the session's existing `TextEdit`.
+- `Y.decodeUpdate` confirms the deletion-only steps of both origins carry a delete set and no structs.
+- A deliberate NFC/NFD mismatch in the expected snapshot fails in both languages; Swift compares snapshots by Unicode scalars because `String ==` treats canonically equivalent text as equal.
 
 ## Editing surface (#3)
 

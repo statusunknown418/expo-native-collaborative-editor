@@ -18,7 +18,8 @@
     "prebuild": "expo prebuild --platform ios",
     "ios": "expo run:ios --device \"$npm_package_config_simulator\"",
     "test:ios:unit": "xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme ExpoNativeCollaborativeEditor-Unit-Tests -destination \"platform=iOS Simulator,name=$npm_package_config_simulator,OS=$npm_package_config_simulatorOS\"",
-    "test:ios:ui": "xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme exponativecollaborativeeditorexample -configuration Release -destination \"platform=iOS Simulator,name=$npm_package_config_simulator,OS=$npm_package_config_simulatorOS\""
+    "test:ios:ui": "xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme exponativecollaborativeeditorexample -configuration Release -destination \"platform=iOS Simulator,name=$npm_package_config_simulator,OS=$npm_package_config_simulatorOS\"",
+    "test:fixtures": "bun test ../fixtures && set -o pipefail && xcodebuild test -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme ExpoNativeCollaborativeEditor-Unit-Tests -destination \"platform=iOS Simulator,name=$npm_package_config_simulator,OS=$npm_package_config_simulatorOS\" -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/FixtureCorpusTests | grep -E 'error:|[*][*] TEST'"
   },
   "config": {
     "simulator": "iPhone 17 Pro",

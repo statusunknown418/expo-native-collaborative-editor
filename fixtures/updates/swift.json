@@ -1,0 +1,42 @@
+{
+  "cjk" : [
+    "AQHdwqHj7p2yBgAEAQRib2R5GOaXpeacrOiqnuOBruODhuOCreOCueODiAA=",
+    "AQHdwqHj7p2yBgiE3cKh4+6dsgYHJeOAgeS4reaWh+aWh+acrOOAge2VnOq1reyWtCDthY3siqTtirgA",
+    "AQHdwqHj7p2yBhXE3cKh4+6dsgYD3cKh4+6dsgYECvCgrrfph47lrrYA"
+  ],
+  "combining-marks" : [
+    "AQHKkbOzzfSkDAAEAQRib2R5BmNhZmXMgQA=",
+    "AQHKkbOzzfSkDAWEypGzs830pAwEAsOpAcqRs7PN9KQMAQMC",
+    "AQHKkbOzzfSkDAaEypGzs830pAwFKCwgVGllzILMgW5nIFZpZcyjzIJ0LCDgpKjgpK7gpLjgpY3gpKTgpYcA",
+    "AQHKkbOzzfSkDB6EypGzs830pAwdLlRpZcyCzIFuZyBWaWXMo8yCdCwg4KSo4KSu4KS44KWN4KSk4KWHLCBjYWZlzIEBypGzs830pAwCAAMFGQ=="
+  ],
+  "deleted-content" : [
+    "AQGspNf6hZO2CQAEAQRib2R5IktlZXAgdGhpcywgZHJvcCB0aGF0LCBrZWVwIHRoZSBlbmQA",
+    "AAGspNf6hZO2CQELCw==",
+    "AQGspNf6hZO2CSLErKTX+oWTtgkVrKTX+oWTtgkWFHRoZW4gbmV3IHRleHQg8J+MjSwgAA=="
+  ],
+  "deletion-only" : [
+    "AQGM\/O7J2+6pAwAEAQRib2R5QlJlbW92ZSDwn5Go4oCN8J+RqeKAjfCfkafigI3wn5GmIGFuZCBjYWZlzIEgYW5kIOaXpeacrOiqniBlbnRpcmVseQA=",
+    "AAGM\/O7J2+6pAwEHDA==",
+    "AAGM\/O7J2+6pAwEXCg==",
+    "AAGM\/O7J2+6pAwITBCEE",
+    "AAGM\/O7J2+6pAwIAByUI"
+  ],
+  "emoji" : [
+    "AQGu9evki97mCwAEAQRib2R5C1RodW1icyDwn5GNAA==",
+    "AQGu9evki97mCwmErvXr5Ive5gsIC\/CfkY3wn4+9IHVwAa716+SL3uYLAQcC",
+    "AQGu9evki97mCxDErvXr5Ive5gsArvXr5Ive5gsBKUZsYWdzIPCfh6\/wn4e18J+Hp\/Cfh7csIGtleWNhcCAx77iP4oOjLCB0Aa716+SL3uYLAQAB",
+    "AQGu9evki97mCy3ErvXr5Ive5gsMrvXr5Ive5gsNCPCfkY3wn4+7Aa716+SL3uYLAQkE"
+  ],
+  "right-to-left" : [
+    "AQGa4vaq2fSeDwAEAQRib2R5Edep15zXldedINei15XXnNedAA==",
+    "AQGa4vaq2fSeDwmEmuL2qtn0ng8IGywg2YXYsdit2KjYpyDYqNin2YTYudin2YTZhQA=",
+    "AQGa4vaq2fSeDxjEmuL2qtn0ng8ImuL2qtn0ng8JHkhlbGxvINep15zXldedIDEyMyDXoteV15zXneKAjwGa4vaq2fSeDwEACQ==",
+    "AQGa4vaq2fSeDyzEmuL2qtn0ng8OmuL2qtn0ng8PENmF2Y7YsdmS2K3Zjtio2YsBmuL2qtn0ng8BCwQ="
+  ],
+  "zwj-sequences" : [
+    "AQGw65vEr5PxCgAEAQRib2R5GUZhbWlseSDwn5Go4oCN8J+RqeKAjfCfkacA",
+    "AQGw65vEr5PxCg+EsOubxK+T8QoOLPCfkajigI3wn5Gp4oCN8J+Rp+KAjfCfkaYsIGNvZGVyIPCfp5HigI3wn5K7AbDrm8Svk\/EKAQcI",
+    "AQGw65vEr5PxCieEsOubxK+T8QomJPCfp5Hwn4+94oCN8J+SuywgZmxhZyDwn4+z77iP4oCN8J+MiAGw65vEr5PxCgEiBQ=="
+  ]
+}

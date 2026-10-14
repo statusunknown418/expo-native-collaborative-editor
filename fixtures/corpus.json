@@ -1,0 +1,42 @@
+{
+  "emoji": [
+    { "text": "Thumbs 👍" },
+    { "text": "Thumbs 👍🏽 up" },
+    { "text": "Flags 🇯🇵🇧🇷, keycap 1\ufe0f\u20e3, thumbs 👍🏽 up" },
+    { "text": "Flags 🇯🇵🇧🇷, keycap 1\ufe0f\u20e3, thumbs 👍🏻 up" }
+  ],
+  "zwj-sequences": [
+    { "text": "Family 👨\u200d👩\u200d👧" },
+    { "text": "Family 👨\u200d👩\u200d👧\u200d👦, coder 🧑\u200d💻" },
+    { "text": "Family 👨\u200d👩\u200d👧\u200d👦, coder 🧑🏽\u200d💻, flag 🏳\ufe0f\u200d🌈" }
+  ],
+  "combining-marks": [
+    { "text": "cafe\u0301" },
+    { "text": "caf\u00e9" },
+    { "text": "caf\u00e9, Tie\u0302\u0301ng Vie\u0323\u0302t, नमस्ते" },
+    { "text": "Tie\u0302\u0301ng Vie\u0323\u0302t, नमस्ते, cafe\u0301" }
+  ],
+  "cjk": [
+    { "text": "日本語のテキスト" },
+    { "text": "日本語のテキスト、中文文本、한국어 텍스트" },
+    { "text": "日本語の𠮷野家テキスト、中文文本、한국어 텍스트" }
+  ],
+  "right-to-left": [
+    { "text": "שלום עולם" },
+    { "text": "שלום עולם, مرحبا بالعالم" },
+    { "text": "Hello שלום 123 עולם\u200f, مرحبا بالعالم" },
+    { "text": "Hello שלום 123 עולם\u200f, مَرْحَبًا بالعالم" }
+  ],
+  "deleted-content": [
+    { "text": "Keep this, drop that, keep the end" },
+    { "text": "Keep this, keep the end" },
+    { "text": "Keep this, then new text 🌍, keep the end" }
+  ],
+  "deletion-only": [
+    { "text": "Remove 👨\u200d👩\u200d👧\u200d👦 and cafe\u0301 and 日本語 entirely" },
+    { "text": "Remove and cafe\u0301 and 日本語 entirely" },
+    { "text": "Remove and 日本語 entirely" },
+    { "text": "Remove entirely" },
+    { "text": "" }
+  ]
+}

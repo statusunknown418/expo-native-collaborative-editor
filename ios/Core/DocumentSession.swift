@@ -39,7 +39,7 @@ final class DocumentSession: ObservableObject {
     try doc.write { transaction in
       for update in updates { try transaction.apply(.v1(update)) }
     }
-    text = try doc.read { try $0.string(from: body) }
+    text = try SemanticSnapshot(body: body, in: doc).text
     // Registered after replay so it only sees this session's transactions.
     updateObservation = try doc.observeUpdates { [transactionUpdate] event in
       if case .update(let update) = event { transactionUpdate.data = update.data }

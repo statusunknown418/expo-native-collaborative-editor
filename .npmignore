@@ -10,3 +10,4 @@ __tests__
 /babel.config.js
 /internal/module_scripts/
 /example/
+/fixtures/

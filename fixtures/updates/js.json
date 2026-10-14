@@ -1,0 +1,42 @@
+{
+  "emoji": [
+    "AQGQ4euEAQAEAQRib2R5C1RodW1icyDwn5GNAA==",
+    "AQGQ4euEAQmEkOHrhAEIB/Cfj70gdXAA",
+    "AQGQ4euEAQ7EkOHrhAEAkOHrhAEBKUZsYWdzIPCfh6/wn4e18J+Hp/Cfh7csIGtleWNhcCAx77iP4oOjLCB0AZDh64QBAQAB",
+    "AQGQ4euEASvEkOHrhAEKkOHrhAELBPCfj7sBkOHrhAEBCQI="
+  ],
+  "zwj-sequences": [
+    "AQH2r6/xCQAEAQRib2R5GUZhbWlseSDwn5Go4oCN8J+RqeKAjfCfkacA",
+    "AQH2r6/xCQ+E9q+v8QkOGuKAjfCfkaYsIGNvZGVyIPCfp5HigI3wn5K7AA==",
+    "AQH2r6/xCR+E9q+v8QkeIPCfj73igI3wn5K7LCBmbGFnIPCfj7PvuI/igI3wn4yIAfavr/EJARwD"
+  ],
+  "combining-marks": [
+    "AQHe2ZScDQAEAQRib2R5BmNhZmXMgQA=",
+    "AQHe2ZScDQWE3tmUnA0EAsOpAd7ZlJwNAQMC",
+    "AQHe2ZScDQaE3tmUnA0FKCwgVGllzILMgW5nIFZpZcyjzIJ0LCDgpKjgpK7gpLjgpY3gpKTgpYcA",
+    "AQHe2ZScDR6E3tmUnA0dLlRpZcyCzIFuZyBWaWXMo8yCdCwg4KSo4KSu4KS44KWN4KSk4KWHLCBjYWZlzIEB3tmUnA0CAAMFGQ=="
+  ],
+  "cjk": [
+    "AQHDu707AAQBBGJvZHkY5pel5pys6Kqe44Gu44OG44Kt44K544OIAA==",
+    "AQHDu707CITDu707ByXjgIHkuK3mlofmlofmnKzjgIHtlZzqta3slrQg7YWN7Iqk7Yq4AA==",
+    "AQHDu707FcTDu707A8O7vTsECvCgrrfph47lrrYA"
+  ],
+  "right-to-left": [
+    "AQHKjJr0AwAEAQRib2R5Edep15zXldedINei15XXnNedAA==",
+    "AQHKjJr0AwmEyoya9AMIGywg2YXYsdit2KjYpyDYqNin2YTYudin2YTZhQA=",
+    "AQHKjJr0AxjEyoya9AMIyoya9AMJHkhlbGxvINep15zXldedIDEyMyDXoteV15zXneKAjwHKjJr0AwEACQ==",
+    "AQHKjJr0AyzEyoya9AMOyoya9AMPDtmO2LHZktit2Y7YqNmLAcqMmvQDAQwD"
+  ],
+  "deleted-content": [
+    "AQGm66SeCAAEAQRib2R5IktlZXAgdGhpcywgZHJvcCB0aGF0LCBrZWVwIHRoZSBlbmQA",
+    "AAGm66SeCAELCw==",
+    "AQGm66SeCCLEpuuknggVpuuknggWFHRoZW4gbmV3IHRleHQg8J+MjSwgAA=="
+  ],
+  "deletion-only": [
+    "AQGdx9HdCwAEAQRib2R5QlJlbW92ZSDwn5Go4oCN8J+RqeKAjfCfkafigI3wn5GmIGFuZCBjYWZlzIEgYW5kIOaXpeacrOiqniBlbnRpcmVseQA=",
+    "AAGdx9HdCwEHDA==",
+    "AAGdx9HdCwEXCg==",
+    "AAGdx9HdCwITBCEE",
+    "AAGdx9HdCwIAByUI"
+  ]
+}

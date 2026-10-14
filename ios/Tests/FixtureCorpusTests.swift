@@ -1,0 +1,80 @@
+import SwiftYrs
+import XCTest
+
+@testable import ExpoNativeCollaborativeEditor
+
+/// Decodes every recorded fixture with Yrs and compares it with its scenario in `fixtures/corpus.json`.
+/// With `RECORD_FIXTURES` set (`TEST_RUNNER_RECORD_FIXTURES=1` through `xcodebuild`), first records
+/// the scenarios that `fixtures/updates/swift.json` lacks.
+@MainActor
+final class FixtureCorpusTests: XCTestCase {
+  func testEveryFixtureDecodesToItsScenarioSnapshots() throws {
+    let corpus = try JSONDecoder().decode(
+      [String: [SemanticSnapshot]].self, from: Data(contentsOf: fixturesURL.appending(path: "corpus.json")))
+    if ProcessInfo.processInfo.environment["RECORD_FIXTURES"] != nil {
+      try recordMissingNativeFixtures(corpus)
+    }
+
+    for origin in ["swift", "js"] {
+      let recorded = try recordedUpdates(origin)
+      for (name, steps) in corpus.sorted(by: { $0.key < $1.key }) {
+        let fixture = "\(origin)/\(name)"
+        do {
+          try verify(fixture, updates: recorded[name] ?? [], steps: steps)
+        } catch {
+          XCTFail("\(fixture): \(error)")
+        }
+      }
+    }
+  }
+
+  private func verify(_ fixture: String, updates: [Data], steps: [SemanticSnapshot]) throws {
+    guard updates.count == steps.count else {
+      return XCTFail("\(fixture): \(updates.count) updates recorded for \(steps.count) steps")
+    }
+    let doc = YDoc()
+    let body = try doc.text(named: "body")
+    for (step, (update, expected)) in zip(updates, steps).enumerated() {
+      // The second application replays the update, which must change nothing.
+      for _ in 1...2 {
+        try doc.apply(.v1(update))
+        XCTAssertEqual(try SemanticSnapshot(body: body, in: doc), expected, "\(fixture) step \(step)")
+      }
+    }
+    for update in updates { try doc.apply(.v1(update)) }
+    XCTAssertEqual(try SemanticSnapshot(body: body, in: doc), steps.last, "\(fixture) after replaying every update")
+  }
+
+  /// Takes a document session through each missing scenario and records the updates it commits.
+  private func recordMissingNativeFixtures(_ corpus: [String: [SemanticSnapshot]]) throws {
+    var recorded = try recordedUpdates("swift")
+    for (name, steps) in corpus where recorded[name] == nil {
+      let store = try DocumentStore(url: temporaryStoreURL())
+      let session = try DocumentSessionRegistry(store: store).session(accountNamespace: "fixtures", documentID: name)
+      for step in steps { try session.replaceText(with: step.text) }
+      waitUntil { session.isSavedOnThisPhone }
+      recorded[name] = try store.outbox(for: session.metadata.key).map(\.update)
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(recorded).write(to: updatesURL("swift"))
+  }
+
+  /// Scenario name → v1 updates, one per step (base64 in the file).
+  private func recordedUpdates(_ origin: String) throws -> [String: [Data]] {
+    let url = updatesURL(origin)
+    guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+    return try JSONDecoder().decode([String: [Data]].self, from: Data(contentsOf: url))
+  }
+
+  private func updatesURL(_ origin: String) -> URL {
+    fixturesURL.appending(path: "updates/\(origin).json")
+  }
+}
+
+/// The repository's `fixtures` directory, used in place: simulator tests can read and write host files.
+private let fixturesURL = URL(filePath: #filePath)
+  .deletingLastPathComponent()
+  .deletingLastPathComponent()
+  .deletingLastPathComponent()
+  .appending(path: "fixtures")

@@ -71,3 +71,39 @@ bun run test:ios:ui         # example UI tests: app scheme, Release build (JS bu
 - UI tests live in `example/uitests/` and build as the `ExampleUITests` target.
 
 `example/plugins/withNativeTests.js` wires both into the generated project during prebuild: it adds the module pod with `:testspecs => ['Tests']` to the Podfile, and adds the `ExampleUITests` target (every `example/uitests/*.swift` file) to the app's Xcode project and scheme. After adding a Swift file to either directory, rerun `bunx expo prebuild --platform ios --clean`.
+
+## Cross-language fixtures
+
+`fixtures/` holds golden updates showing that Yrs (SwiftYrs) and Yjs 13.6.33, the engine's JavaScript implementation (pinned in the root `devDependencies`), decode the same bytes to the same document. Verify the corpus from `example/` after `bun run prebuild`:
+
+```sh
+bun run test:fixtures       # fixtures/corpus.test.ts (Yjs), then FixtureCorpusTests (Yrs) on the simulator
+```
+
+Both tests decode every fixture: they apply each update twice, since replaying an update must change nothing, then replay every update again, comparing the result with the scenario's semantic snapshots. Each failure names its fixture as `<origin>/<scenario>`, such as `swift/zwj-sequences`; Swift failures add the step. The Swift half runs `xcodebuild` without `-quiet`, which in Xcode 27 hides assertion messages, and prints only its `error:` lines and result.
+
+| File                          | Contents                                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------------- |
+| `fixtures/corpus.json`        | Scenario name → the semantic snapshot after each step. Hand-written: the expected values. |
+| `fixtures/updates/swift.json` | Scenario name → the Yrs v1 updates a `DocumentSession` committed, one per step (base64).  |
+| `fixtures/updates/js.json`    | Scenario name → Yjs v1 updates, one transaction per step (base64).                        |
+
+Recorded updates are golden: recording adds only the scenarios an origin's file lacks. After adding a scenario to `corpus.json`, record JavaScript first, so that the Swift run, which also verifies, finds both origins:
+
+```sh
+bun ../fixtures/record.ts
+TEST_RUNNER_RECORD_FIXTURES=1 bun run test:ios:unit -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/FixtureCorpusTests
+bun run test:fixtures
+```
+
+To re-record a changed scenario, first delete its entry from both update files.
+
+### Semantic snapshot
+
+The engine-independent projection of a document that tests compare: `SemanticSnapshot` in Swift (`ios/Core/SemanticSnapshot.swift`, also the source of the document session's plain text) and `semanticSnapshot` in JavaScript (`fixtures/semanticSnapshot.ts`). It is a JSON object:
+
+| Key    | Value                                                                   |
+| ------ | ----------------------------------------------------------------------- |
+| `text` | The document text: Unicode scalars exactly as stored, never normalized. |
+
+Equality is exact: canonically equivalent text, such as `é` and `e` + U+0301, differs. Marks, list items, and record references extend the format as new keys; a key is omitted while its content is empty, so existing scenarios stay valid.
