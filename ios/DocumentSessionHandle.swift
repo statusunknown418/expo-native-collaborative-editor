@@ -4,25 +4,39 @@ import Synchronization
 
 /// JavaScript's handle to a shared native document session. It carries status, never document content.
 final class DocumentSessionHandle: SharedObject, @unchecked Sendable {
+  private struct State: Equatable {
+    var savedOnThisPhone: Bool
+    var pendingSynchronization: Bool
+
+    var payload: [String: Any] {
+      ["savedOnThisPhone": savedOnThisPhone, "pendingSynchronization": pendingSynchronization]
+    }
+  }
+
   let session: DocumentSession
   /// Last published state, readable from the JavaScript thread.
-  private let savedOnThisPhone: Synchronization.Mutex<Bool>
+  private let published: Synchronization.Mutex<State>
   private var stateSubscription: AnyCancellable?
 
   @MainActor
   init(session: DocumentSession) {
     self.session = session
-    savedOnThisPhone = Mutex(session.isSavedOnThisPhone)
+    published = Mutex(
+      State(savedOnThisPhone: session.isSavedOnThisPhone, pendingSynchronization: session.hasPendingSynchronization))
     super.init()
-    stateSubscription = session.$isSavedOnThisPhone.dropFirst().removeDuplicates().sink { [weak self] saved in
-      guard let self else { return }
-      savedOnThisPhone.withLock { $0 = saved }
-      emit(event: "stateChange", payload: ["savedOnThisPhone": saved])
-    }
+    stateSubscription = session.$isSavedOnThisPhone.combineLatest(session.$hasPendingSynchronization)
+      .map(State.init)
+      .dropFirst()
+      .removeDuplicates()
+      .sink { [weak self] state in
+        guard let self else { return }
+        published.withLock { $0 = state }
+        emit(event: "stateChange", payload: state.payload)
+      }
   }
 
   var state: [String: Any] {
-    ["savedOnThisPhone": savedOnThisPhone.withLock { $0 }]
+    published.withLock { $0 }.payload
   }
 }
 

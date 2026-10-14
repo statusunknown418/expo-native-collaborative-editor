@@ -50,9 +50,9 @@ bun run prebuild            # expo prebuild --platform ios (generates example/io
 bun run ios                 # builds Debug, boots the simulator, starts Metro, launches the app
 ```
 
-The example opens the proof screen: a local-only document (`example-account` / `proof-document`) in the module's `EditingSurface`, with "Saved on this phone" shown once every edit is committed and a button that unmounts and remounts the surface. Launching with `-documentId <id>` opens another document; the UI test uses this for a fresh document per run.
+The example opens the proof screen: a local-only document (`example-account` / `proof-document`) in the module's `EditingSurface`, with "Saved on this phone" shown once every edit is committed and a button that unmounts and remounts the surface. Launching with `-documentId <id>` opens another document; the UI tests use this for a fresh document per run. Launching with `-remoteEdits <percent-encoded JSON>`, an array of `{ "offset", "deleteCount", "text" }` in UTF-16 code units, connects a test-only scripted remote replica through the in-process delivery harness, shows "Pending synchronization" until receipts acknowledge every committed edit, and adds a "Remote edit" button that makes the next edit; `RemoteEditTests` uses it.
 
-`example/ios` is generated and git-ignored. After changing `example/app.json`, `example/plugins/`, the podspec, or native dependencies, regenerate it with `bunx expo prebuild --platform ios --clean`.
+`example/ios` is generated and git-ignored. After changing `example/app.json`, `example/plugins/`, the podspec, or native dependencies, regenerate it from `example/` with `bunx expo prebuild --platform ios --clean`. Run at the repository root, the same command deletes the module's `ios/` sources.
 
 While editing the module's TypeScript, run `bun run build` at the root to rebuild `build/` on change; Metro resolves the module through its `main` entry.
 

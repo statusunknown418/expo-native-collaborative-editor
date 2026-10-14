@@ -191,7 +191,7 @@ func waitUntil(
 ) {
   let deadline = Date().addingTimeInterval(timeout)
   while !condition(), Date() < deadline {
-    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+    RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
   }
   XCTAssertTrue(condition(), "condition not met within \(timeout)s", file: file, line: line)
 }

@@ -5,6 +5,11 @@ import { NativeModule, requireNativeModule, SharedObject } from 'expo';
 export type DocumentSessionState = {
   /** Every local edit is durably committed on this device. */
   savedOnThisPhone: boolean;
+  /**
+   * Committed local edits await receipts. A local-only document's edits stay pending until it
+   * synchronizes.
+   */
+  pendingSynchronization: boolean;
 };
 
 export type DocumentSessionEvents = {

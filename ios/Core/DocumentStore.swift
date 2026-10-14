@@ -28,8 +28,8 @@ struct DocumentStoreError: Error, CustomStringConvertible {
   let description: String
 }
 
-/// SQLite store (the system `libsqlite3`) for document metadata, engine updates, and the outbox. Every
-/// statement runs on `queue`, the serial storage executor.
+/// SQLite store (the system `libsqlite3`) for document metadata, engine updates, the outbox, and
+/// delivery positions. Every statement runs on `queue`, the serial storage executor.
 final class DocumentStore: @unchecked Sendable {
   /// Yrs v1 updates to a single `YText` named `body`. Not frozen until the document representation is.
   static let plainTextSchemaID = "yrs-update-v1/plain-text-0"
@@ -139,31 +139,95 @@ final class DocumentStore: @unchecked Sendable {
   }
 
   /// Commits `update` and its outbox operation in one transaction on the storage executor, then calls
-  /// `completion` there with `nil` once the commit is durable, or with the error that rolled it back.
-  func append(_ update: Data, to key: DocumentKey, completion: @escaping @Sendable (Error?) -> Void) {
+  /// `completion` there with the operation once the commit is durable, or with the error that rolled
+  /// it back.
+  func append(
+    _ update: Data, to key: DocumentKey,
+    completion: @escaping @Sendable (Result<OutboxOperation, Error>) -> Void
+  ) {
     queue.async {
-      do {
-        try self.execute("BEGIN IMMEDIATE")
-        do {
-          try self.run(
+      completion(
+        Result {
+          let operation = OutboxOperation(operationID: UUID(), update: update)
+          try self.transaction {
+            let sequence = try self.insert(update, for: key)
+            try self.run(
+              "INSERT INTO outbox (operation_id, update_sequence) VALUES (?, ?)",
+              [.text(operation.operationID.uuidString), .int(sequence)])
+          }
+          return operation
+        })
+    }
+  }
+
+  /// Removes the outbox operations a receipt names, in one transaction, and returns how many of the
+  /// document's operations remain pending. IDs no longer pending are ignored, so receipts can repeat.
+  func acknowledge(_ operationIDs: [UUID], for key: DocumentKey) throws -> Int {
+    try queue.sync {
+      var pending = 0
+      try transaction {
+        for operationID in operationIDs {
+          try run(
             """
-            INSERT INTO updates (account_namespace, document_id, lifecycle_generation, payload)
-            VALUES (?, ?, ?, ?)
+            DELETE FROM outbox WHERE operation_id = ? AND update_sequence IN (
+              SELECT sequence FROM updates
+              WHERE account_namespace = ? AND document_id = ? AND lifecycle_generation = ?)
             """,
-            Self.keyBindings(key) + [.blob(update)])
-          try self.run(
-            "INSERT INTO outbox (operation_id, update_sequence) VALUES (?, ?)",
-            [.text(UUID().uuidString), .int(Int(sqlite3_last_insert_rowid(self.db)))])
-          try self.execute("COMMIT")
-        } catch {
-          try? self.execute("ROLLBACK")
-          throw error
+            [.text(operationID.uuidString)] + Self.keyBindings(key))
         }
-        completion(nil)
-      } catch {
-        completion(error)
+        try run(
+          """
+          SELECT COUNT(*) FROM outbox JOIN updates ON updates.sequence = outbox.update_sequence
+          WHERE account_namespace = ? AND document_id = ? AND lifecycle_generation = ?
+          """,
+          Self.keyBindings(key)
+        ) { row in pending = Int(sqlite3_column_int64(row, 0)) }
+      }
+      return pending
+    }
+  }
+
+  /// The last position of the document's delivery feed that has been persisted, or 0.
+  func deliveredThrough(_ key: DocumentKey) throws -> Int {
+    try queue.sync {
+      var position = 0
+      try run(
+        """
+        SELECT COALESCE(MAX(position), 0) FROM deliveries
+        WHERE account_namespace = ? AND document_id = ? AND lifecycle_generation = ?
+        """,
+        Self.keyBindings(key)
+      ) { row in position = Int(sqlite3_column_int64(row, 0)) }
+      return position
+    }
+  }
+
+  /// Durably commits a remote update with its position in the document's delivery feed, in one
+  /// transaction. Remote updates join the document's updates but never its outbox.
+  func receive(_ update: Data, at position: Int, for key: DocumentKey) throws {
+    try queue.sync {
+      try transaction {
+        let sequence = try insert(update, for: key)
+        try run(
+          """
+          INSERT INTO deliveries
+          (account_namespace, document_id, lifecycle_generation, position, update_sequence)
+          VALUES (?, ?, ?, ?, ?)
+          """,
+          Self.keyBindings(key) + [.int(position), .int(sequence)])
       }
     }
+  }
+
+  /// Adds `update` to the document's updates and returns its sequence.
+  private func insert(_ update: Data, for key: DocumentKey) throws -> Int {
+    try run(
+      """
+      INSERT INTO updates (account_namespace, document_id, lifecycle_generation, payload)
+      VALUES (?, ?, ?, ?)
+      """,
+      Self.keyBindings(key) + [.blob(update)])
+    return Int(sqlite3_last_insert_rowid(db))
   }
 
   // MARK: - SQLite
@@ -198,6 +262,14 @@ final class DocumentStore: @unchecked Sendable {
     ) STRICT;
     CREATE TRIGGER IF NOT EXISTS outbox_operations_are_immutable BEFORE UPDATE ON outbox
     BEGIN SELECT RAISE(ABORT, 'outbox operations are immutable'); END;
+    CREATE TABLE IF NOT EXISTS deliveries (
+      account_namespace TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      lifecycle_generation INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      update_sequence INTEGER NOT NULL UNIQUE REFERENCES updates (sequence),
+      PRIMARY KEY (account_namespace, document_id, lifecycle_generation, position)
+    ) STRICT;
     """
 
   private enum Value {
@@ -217,6 +289,18 @@ final class DocumentStore: @unchecked Sendable {
 
   private func execute(_ sql: String) throws {
     try check(sqlite3_exec(db, sql, nil, nil, nil))
+  }
+
+  /// Runs `body` in one write transaction, rolling it back if `body` throws.
+  private func transaction(_ body: () throws -> Void) throws {
+    try execute("BEGIN IMMEDIATE")
+    do {
+      try body()
+      try execute("COMMIT")
+    } catch {
+      try? execute("ROLLBACK")
+      throw error
+    }
   }
 
   private func run(_ sql: String, _ values: [Value], row: (OpaquePointer) throws -> Void = { _ in }) throws {
