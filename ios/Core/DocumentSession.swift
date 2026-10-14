@@ -14,8 +14,17 @@ final class DocumentSession: ObservableObject {
   let metadata: DocumentMetadata
   /// Plain-text projection of the engine state.
   @Published private(set) var text: String
-  /// Every local update has been committed with its outbox operation ("Saved on this phone").
+  /// Every local update is durable and the input system holds no marked text ("Saved on this phone").
   @Published private(set) var isSavedOnThisPhone = true
+  /// Marked text belongs to the input system, not the document or outbox.
+  var hasMarkedText = false {
+    didSet {
+      guard hasMarkedText != oldValue else { return }
+      isSavedOnThisPhone = !hasMarkedText && !hasUncommittedOperations
+    }
+  }
+  /// Unlike marked input, these operations must finish committing before the harness can deliver them.
+  var hasUncommittedOperations: Bool { hasFailedCommit || savedRevision != revision }
   /// Committed local operations await their receipts ("Pending synchronization").
   @Published private(set) var hasPendingSynchronization: Bool
   /// Each local operation once it commits, for delivery.
@@ -109,7 +118,7 @@ final class DocumentSession: ObservableObject {
             self.hasFailedCommit = true
           case .success(let operation):
             self.savedRevision = committing
-            self.isSavedOnThisPhone = !self.hasFailedCommit && self.savedRevision == self.revision
+            self.isSavedOnThisPhone = !self.hasMarkedText && !self.hasUncommittedOperations
             self.hasPendingSynchronization = true
             self.committedOperations.send(operation)
           }

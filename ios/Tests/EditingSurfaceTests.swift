@@ -1,0 +1,218 @@
+import Combine
+import SwiftUI
+import SwiftYrs
+import UIKit
+import XCTest
+
+@testable import ExpoNativeCollaborativeEditor
+
+@MainActor
+final class EditingSurfaceTests: XCTestCase {
+  func testMarkedTextStaysOutOfTheDocumentUntilOneIncrementalCommit() throws {
+    let storage = DispatchQueue(label: "test.composition.storage")
+    let session = try DocumentSessionRegistry(store: DocumentStore(url: temporaryStoreURL(), queue: storage))
+      .session(accountNamespace: "input", documentID: "composition")
+    try session.replaceText(with: "Left right")
+    waitUntil { session.isSavedOnThisPhone }
+    let seed = try session.pendingOperations().map(\.update)
+    var saved: [Bool] = []
+    let subscription = session.$isSavedOnThisPhone.removeDuplicates().sink { saved.append($0) }
+    defer { subscription.cancel() }
+    try session.acknowledge(try session.pendingOperations().map(\.operationID))
+    let surface = Surface(session: session)
+    let view = surface.textView
+    view.selectedRange = NSRange(location: 5, length: 0)
+
+    view.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+    XCTAssertNotNil(view.markedTextRange)
+    XCTAssertEqual(view.text, "Left にright")
+    XCTAssertEqual(session.text, "Left right")
+    XCTAssertTrue(try session.pendingOperations().isEmpty)
+    XCTAssertFalse(session.isSavedOnThisPhone)
+    view.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0))
+    XCTAssertEqual(session.text, "Left right")
+    XCTAssertTrue(try session.pendingOperations().isEmpty)
+
+    storage.suspend()
+    view.unmarkText()
+    XCTAssertNil(view.markedTextRange)
+    XCTAssertEqual(view.text, "Left 日本right")
+    XCTAssertEqual(session.text, "Left 日本right")
+    XCTAssertEqual(saved, [true, false], "composition must not acknowledge unsaved input")
+    storage.resume()
+    waitUntil { session.isSavedOnThisPhone }
+    XCTAssertEqual(try session.pendingOperations().count, 1)
+    XCTAssertEqual(
+      try replicaDelta(applying: seed + session.pendingOperations().map(\.update)),
+      [.retain(5), .insert(.string("日本"))])
+  }
+
+  func testRemoteEditsPreserveMarkedTextAndItsSelection() throws {
+    let cases: [(range: Range<Int>, text: String, document: String, committed: String)] = [
+      (0..<0, "👋 ", "👋 Left old right", "👋 Left 日本語 right"),
+      (14..<14, "!", "Left old right!", "Left 日本語 right!"),
+      (5..<5, "[", "Left [old right", "Left [日本語 right"),
+      (8..<8, "]", "Left old] right", "Left 日本語] right"),
+      (0..<5, "", "old right", "日本語 right"),
+      (8..<14, "", "Left old", "Left 日本語"),
+      (0..<4, "New", "New old right", "New 日本語 right"),
+      (9..<14, "end", "Left old end", "Left 日本語 end"),
+    ]
+    for (index, example) in cases.enumerated() {
+      let local = try replica()
+      let remote = try replica()
+      let harness = DeliveryHarness(seed: 1, faults: .none)
+      try harness.connect(local)
+      try harness.connect(remote)
+      try local.replaceText(with: "Left old right")
+      waitUntil { local.isSavedOnThisPhone }
+      try harness.runUntilIdle()
+      let surface = Surface(session: local)
+      let view = surface.textView
+      view.selectedRange = NSRange(location: 5, length: 3)
+      view.setMarkedText("日本", selectedRange: NSRange(location: 1, length: 0))
+
+      try remote.replaceText(in: example.range, with: example.text)
+      waitUntil { remote.isSavedOnThisPhone }
+      try harness.runUntilIdle()
+      XCTAssertEqual(local.text, example.document, "case \(index): remote edit must reach the document")
+      let marked = try XCTUnwrap(view.markedTextRange, "case \(index)")
+      XCTAssertEqual(view.text(in: marked), "日本", "case \(index)")
+      XCTAssertEqual(view.offset(from: marked.start, to: view.selectedTextRange!.start), 1, "case \(index)")
+      XCTAssertTrue(try local.pendingOperations().isEmpty, "case \(index)")
+      XCTAssertFalse(local.isSavedOnThisPhone, "case \(index)")
+
+      view.insertText("日本語")
+      XCTAssertNil(view.markedTextRange)
+      XCTAssertEqual(view.text, example.committed, "case \(index)")
+      XCTAssertEqual(local.text, example.committed, "case \(index)")
+      waitUntil { local.isSavedOnThisPhone }
+      XCTAssertEqual(try local.pendingOperations().count, 1, "case \(index)")
+      try harness.runUntilIdle()
+      XCTAssertEqual(remote.text, example.committed, "case \(index)")
+    }
+  }
+
+  func testSystemReplacementsKeepExactRangesInIncrementalTransactions() throws {
+    let cases: [(before: String, range: NSRange, replacement: String, after: String, delta: [YTextDeltaOperation])] = [
+      ("teh cat", NSRange(location: 0, length: 3), "the", "the cat", [.delete(3), .insert(.string("the"))]),
+      ("I ca", NSRange(location: 2, length: 2), "cannot ", "I cannot ", [.retain(2), .delete(2), .insert(.string("cannot "))]),
+      ("aa", NSRange(location: 0, length: 0), "a", "aaa", [.insert(.string("a"))]),
+      ("🙂 cafe\u{301}", NSRange(location: 3, length: 5), "café", "🙂 café", [.retain(3), .delete(5), .insert(.string("café"))]),
+    ]
+    for (index, example) in cases.enumerated() {
+      let session = try replica()
+      try session.replaceText(with: example.before)
+      waitUntil { session.isSavedOnThisPhone }
+      let surface = Surface(session: session)
+      let view = surface.textView
+      let start = try XCTUnwrap(view.position(from: view.beginningOfDocument, offset: example.range.location))
+      let end = try XCTUnwrap(view.position(from: start, offset: example.range.length))
+      let range = try XCTUnwrap(view.textRange(from: start, to: end))
+
+      view.replace(range, withText: example.replacement)
+      XCTAssertEqual(view.text, example.after, "case \(index)")
+      XCTAssertEqual(Array(session.text.unicodeScalars), Array(example.after.unicodeScalars), "case \(index)")
+      waitUntil { session.isSavedOnThisPhone }
+      let updates = try session.pendingOperations().map(\.update)
+      XCTAssertEqual(updates.count, 2, "case \(index)")
+      XCTAssertEqual(try replicaDelta(applying: updates), example.delta, "case \(index)")
+    }
+  }
+
+  func testCancelledCompositionQueuesNothing() throws {
+    let session = try replica()
+    let surface = Surface(session: session)
+    let view = surface.textView
+    view.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+    XCTAssertFalse(session.isSavedOnThisPhone)
+    view.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+    view.unmarkText()
+    XCTAssertEqual(view.text, "")
+    XCTAssertEqual(session.text, "")
+    XCTAssertTrue(try session.pendingOperations().isEmpty)
+    XCTAssertTrue(session.isSavedOnThisPhone)
+  }
+
+  func testScriptedReplicaDeliversWhileMarkedInputIsUnsaved() throws {
+    let session = try replica()
+    let scripted = try ScriptedReplica(connectingTo: session)
+    try session.replaceText(with: "Left right")
+    waitUntil { session.isSavedOnThisPhone && !session.hasPendingSynchronization }
+    let surface = Surface(session: session)
+    let view = surface.textView
+    view.selectedRange = NSRange(location: 5, length: 0)
+    view.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0))
+    scripted.edit(0..<0, with: "👋 ")
+    withExtendedLifetime(scripted) {
+      waitUntil { session.text == "👋 Left right" }
+    }
+    XCTAssertEqual(view.text(in: try XCTUnwrap(view.markedTextRange)), "中文")
+    XCTAssertTrue(try session.pendingOperations().isEmpty)
+    view.unmarkText()
+    XCTAssertEqual(view.text, "👋 Left 中文right")
+    XCTAssertEqual(session.text, "👋 Left 中文right")
+    view.insertText("!")
+    XCTAssertEqual(view.text, "👋 Left 中文!right")
+    XCTAssertEqual(session.text, "👋 Left 中文!right")
+    withExtendedLifetime(scripted) {
+      waitUntil { session.isSavedOnThisPhone && !session.hasPendingSynchronization }
+    }
+  }
+
+  func testSeveralRemoteEditsAtAnInsertionPointKeepCommittedTypingTogether() throws {
+    let local = try replica()
+    let remote = try replica()
+    let harness = DeliveryHarness(seed: 1, faults: .none)
+    try harness.connect(local)
+    try harness.connect(remote)
+    try local.replaceText(with: "aa")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    let surface = Surface(session: local)
+    let view = surface.textView
+    view.selectedRange = NSRange(location: 0, length: 0)
+    view.setMarkedText("a", selectedRange: NSRange(location: 1, length: 0))
+    try remote.replaceText(in: 0..<0, with: "R")
+    try remote.replaceText(in: 3..<3, with: "Z")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(view.text(in: try XCTUnwrap(view.markedTextRange)), "a")
+    XCTAssertTrue(try local.pendingOperations().isEmpty)
+
+    view.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0))
+    view.unmarkText()
+    XCTAssertEqual(view.text, "あRaaZ")
+    XCTAssertEqual(local.text, "あRaaZ")
+    XCTAssertEqual(view.selectedRange, NSRange(location: 1, length: 0))
+    view.insertText("!")
+    XCTAssertEqual(local.text, "あ!RaaZ")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(remote.text, "あ!RaaZ")
+  }
+}
+
+/// Hosts the same SwiftUI representable as the example, with a real first-responder UITextView.
+@MainActor
+private final class Surface {
+  let window: UIWindow
+  let textView: UITextView
+
+  init(session: DocumentSession) {
+    let controller = UIHostingController(rootView: CollaborativeTextView(session: session))
+    window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+    window.rootViewController = controller
+    window.makeKeyAndVisible()
+    controller.view.layoutIfNeeded()
+    func find(_ view: UIView) -> UITextView? {
+      (view as? UITextView) ?? view.subviews.lazy.compactMap(find).first
+    }
+    textView = find(controller.view)!
+    textView.becomeFirstResponder()
+  }
+
+  deinit {
+    MainActor.assumeIsolated { window.isHidden = true }
+  }
+}

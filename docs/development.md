@@ -70,6 +70,15 @@ bun run test:ios:ui         # example UI tests: app scheme, Release build (JS bu
 - Unit tests live in `ios/Tests/` and build as the podspec's `Tests` test spec.
 - UI tests live in `example/uitests/` and build as the `ExampleUITests` target.
 
+`EditingSurfaceTests` is a native editing-surface integration test: it hosts the actual SwiftUI/`UITextView` surface and drives public `UITextInput` calls for composition and system replacements. Run it alone while changing the input adapter:
+
+```sh
+bun run test:ios:unit -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/EditingSurfaceTests
+```
+
+Remote updates persist during marked-text composition, but their surface patches wait until composition ends; the local commit rebases through their deltas. Marked text is unsaved input and never an outbox operation. Simulator keyboard limits and the physical-device checklist for #18 are recorded in [`m1-evidence.md`](m1-evidence.md#composition-and-system-replacements-g6-6).
+
+
 `example/plugins/withNativeTests.js` wires both into the generated project during prebuild: it adds the module pod with `:testspecs => ['Tests']` to the Podfile, and adds the `ExampleUITests` target (every `example/uitests/*.swift` file) to the app's Xcode project and scheme. After adding a Swift file to either directory, rerun `bunx expo prebuild --platform ios --clean`.
 
 ## Cross-language fixtures

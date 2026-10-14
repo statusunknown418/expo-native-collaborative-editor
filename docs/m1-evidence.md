@@ -53,9 +53,9 @@ Result: **pass** for text. Yjs 13.6.33 decodes every update a SwiftYrs 0.7.0 `Do
 
 #3 bound SwiftUI `TextEditor(text: Binding<String>)` to the document session; #5 replaced it with the TextKit fallback ([below](#remote-edits-on-the-editing-surface-g6-5)). Limitations found through `TextEditor`'s public API, none blocking plain-text typing:
 
-- The binding receives each new value as a whole string, with no edited range. The session derives one grapheme-aligned replacement from the common prefix and suffix, which scans the text on every change. The `UITextView` surface still reports local edits this way.
-- Inside a run of identical characters the edited position is ambiguous: typing `a` at the start of `aa` is recorded as an insertion at the end. The text is the same, but the engine records a different position, which matters for concurrent edits. Caret transforms are unaffected: they follow the text delta's offsets, not item identities. `UITextView`'s `textView(_:shouldChangeTextIn:replacementText:)` reports the exact range; the surface does not use it yet.
-- `TextEditor` exposes no marked-text (composition) state. Composition was not exercised here; #6 covers it.
+- The binding receives each new value as a whole string, with no edited range. The session derives one grapheme-aligned replacement from the common prefix and suffix, scanning the text on every change. #6 removed this diff from the native input path: the `UITextView` adapter reads the actual UTF-16 storage edit, including system replacements.
+- Inside a run of identical characters the whole-text diff cannot identify the edited position: typing `a` at the start of `aa` was recorded at the end. #6 verifies the native input path records the insertion at offset 0.
+- `TextEditor` exposes no marked-text (composition) state. #6 exercises the adopted `UITextView` fallback through public `UITextInput` APIs.
 
 ## Remote edits on the editing surface (G6, #5)
 
@@ -73,7 +73,58 @@ How the surface applies a remote change:
 
 - The session applies the update, then moves its selection through the change's text delta (UTF-16 offsets). A caret sticks to the character before it, so text inserted at the caret lands after it and the person's typing stays contiguous. A range keeps its own characters: text inserted at either edge stays outside it. A deletion spanning the caret leaves it at the deletion point. `SynchronizationTests` covers these cases with emoji, ZWJ sequences, and a cluster replaced before the caret.
 - The surface patches `NSTextStorage` in place with the delta's edits, sets the session's selection, and, unless scrolled to the very top, restores the first visible character's position on screen. Without that restore (checked by disabling it), UIKit keeps the content offset numerically, so an edit above the viewport shifts the visible text.
-- Not yet exercised on this surface: composition (#6) and undo (#7).
+- Composition is covered below (#6). Undo is not yet exercised on this surface (#7).
+
+## Composition and system replacements (G6, #6)
+
+Result: **pass at the native input seam** on iOS 26.2 / iPhone 17 Pro simulator, Xcode 27.0. `EditingSurfaceTests` hosts the same SwiftUI representable as the example in a real window with a first-responder `UITextView`; it calls public `setMarkedText`, `unmarkText`, `insertText`, and `replace(_:withText:)`, not delegate methods or a simulated document model.
+
+Observed blockers and implementation:
+
+- The old adapter persisted each marked-text revision: composing `に`, then `日本`, produced two outbox operations before the input system committed. Marked input now remains only on the editing surface; "Saved on this phone" is withheld while it exists. Unmarking or accepting a candidate produces one exact-range incremental transaction. Cancelling an insertion queues nothing.
+- A direct `NSTextStorage` remote patch clears `markedTextRange`, even without restoring `selectedRange`. During composition, the session still persists and applies incoming updates immediately, but the surface queues their deltas without touching the input system. At commit, it rebases the local replacement and selection through those deltas, then projects the queued patches around the composed text. Remote text becomes visible when composition ends. No marked-text reconstruction or IME restart is used.
+- UIKit can notify delegates before updating its marked range; the adapter waits until each public input call returns. Actual storage character ranges capture typing, autocorrect, predictive replacements, and smart substitutions without ambiguous whole-text diffs. The document/session/store/JavaScript boundary is unchanged apart from the saved status accounting for marked input.
+- The example's scripted replica now distinguishes uncommitted document operations from marked input, so an unsaved composition no longer prevents remote delivery.
+
+Native coverage:
+
+- Provisional Japanese text stays out of the document/outbox, then decodes as only an insertion at UTF-16 offset 5. A suspended storage queue proves no saved acknowledgement appears before the single commit completes.
+- Remote insertions, deletions, and replacements before/after a selected marked range, plus insertions at both adjacent edges, preserve its marked text and selection. Candidate acceptance yields the exact expected text on both replicas, with one local operation.
+- Multiple queued remote edits, including insertion at the same empty document position, preserve continued composition, the committed caret, and subsequent typing without duplication.
+- Chinese marked text survives timer-driven `ScriptedReplica` delivery through the example's harness. Cancellation queues no operation.
+- Autocorrect-style `teh` → `the`, predictive `ca` → `cannot `, repeated-character insertion at offset 0, and NFD → NFC replacement after a surrogate pair decode as exact incremental ranges.
+
+Reproduce from `example/` after prebuild:
+
+```sh
+bun run test:ios:unit -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/EditingSurfaceTests
+```
+
+Final regression run:
+
+| Command | Result |
+| --- | --- |
+| `bun run test:ios:unit` (example) | 21 passed, including 6 editing-surface tests |
+| `bun run test:ios:ui` (example, Release) | 3 passed |
+| `bun test ./fixtures` (root) | 14 passed |
+| `bunx tsc --noEmit`, plus `-p example/tsconfig.json` and `-p fixtures/tsconfig.json` | passed |
+
+Runtime smoke: launched the Release example directly with `simctl launch` on the probe's persisted document; the actual screen displayed `I typed teh` and "Saved on this phone".
+
+Simulator limits: its configured keyboards were `en_US` and emoji, not Japanese or Chinese. An example UI probe typed `I typed teh `; iOS left `teh` unchanged, including after relaunch, so it did not exercise autocorrection. That environment-dependent probe was removed rather than retained as false proof. Native replacement tests cover the editing path, not keyboard dictionaries or candidate UI.
+
+### Physical-device checklist for #18
+
+Record each on both M1 iPhones; these remain **unverified**, not G14 passes:
+
+- Japanese kana-to-kanji and Chinese Pinyin: revise marked text, navigate/change candidates, accept and cancel; repeat for insertion and selection replacement. Verify candidate UI and marked selection remain active during remote edits before, after, at both adjacent edges, and at the same insertion point; also queue several remote edits before committing.
+- Confirm remote presentation catches up only after composition ends, final text matches the chosen candidate exactly on both replicas, and continued typing remains at the committed caret.
+- Autocorrect, explicit predictive-candidate selection, inline prediction acceptance/rejection, and smart punctuation: verify the proposed text survives remote edits and relaunch without duplicate characters.
+- Composition cancellation by Backspace/Escape, focus loss, and editing-surface unmount/remount: verify no provisional input is uploaded or falsely acknowledged.
+- Dictation, including correction/replacement and remote edits during speech input.
+- Hardware keyboard where available: composition/dead keys, candidate navigation, Return acceptance, Escape cancellation, and continued typing after remote delivery.
+
+These results address #6's portion of G6 only. They do not establish the full native-input gate, device performance, access changes during composition, or persistence-failure recovery; the remaining M1 tickets and #18 own those checks.
 
 ## Delivery and convergence (G3 text, #5)
 

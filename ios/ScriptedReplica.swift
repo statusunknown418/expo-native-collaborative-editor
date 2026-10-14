@@ -44,7 +44,7 @@ final class ScriptedReplica: SharedObject, @unchecked Sendable {
   private func tick() {
     do {
       try harness.tick()
-      guard !edits.isEmpty, harness.isIdle, session.isSavedOnThisPhone, replica.isSavedOnThisPhone else { return }
+      guard !edits.isEmpty, harness.isIdle, !session.hasUncommittedOperations, replica.isSavedOnThisPhone else { return }
       let edit = edits.removeFirst()
       try replica.replaceText(in: edit.range, with: edit.text)
     } catch {

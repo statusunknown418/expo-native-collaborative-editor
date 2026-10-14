@@ -3,7 +3,7 @@ import { NativeModule, requireNativeModule, SharedObject } from 'expo';
 // Unstable until the M1 foundation decision (#1).
 
 export type DocumentSessionState = {
-  /** Every local edit is durably committed on this device. */
+  /** Every local edit is durable on this device; marked input is still unsaved. */
   savedOnThisPhone: boolean;
   /**
    * Committed local edits await receipts. A local-only document's edits stay pending until it
