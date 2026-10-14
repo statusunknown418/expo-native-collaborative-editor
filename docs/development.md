@@ -19,6 +19,15 @@ Expo 57.0.28 was npm's `latest` tag on 2026-10-13. Every other package below is 
 
 iOS deployment target: 26.0, set in `ios/ExpoNativeCollaborativeEditor.podspec` and `example/app.json` (`ios.deploymentTarget`).
 
+Native dependencies outside the Expo SDK:
+
+| Dependency                                                 | Version             | Integration                                                                                                                                                                                               |
+| ---------------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [SwiftYrs](https://github.com/siuying/SwiftYrs) (Yrs 0.27) | 0.7.0 (exact)       | Swift package declared in the podspec with React Native's `spm_dependency`; `pod install` adds it to the Pods project and Xcode downloads it and its prebuilt `YrsBridge.xcframework` on the first build. |
+| SQLite                                                     | system `libsqlite3` | `import SQLite3`; no package.                                                                                                                                                                             |
+
+Engine evaluation, packaging cost, and editing-surface findings: [`docs/m1-evidence.md`](m1-evidence.md).
+
 Toolchain used to verify the baseline:
 
 | Tool              | Version                         |
@@ -41,7 +50,7 @@ bun run prebuild            # expo prebuild --platform ios (generates example/io
 bun run ios                 # builds Debug, boots the simulator, starts Metro, launches the app
 ```
 
-The example opens the proof screen: an `@expo/ui` `Host` containing the module's `EditingSurface` view, which renders nothing yet.
+The example opens the proof screen: a local-only document (`example-account` / `proof-document`) in the module's `EditingSurface`, with "Saved on this phone" shown once every edit is committed and a button that unmounts and remounts the surface. Launching with `-documentId <id>` opens another document; the UI test uses this for a fresh document per run.
 
 `example/ios` is generated and git-ignored. After changing `example/app.json`, `example/plugins/`, the podspec, or native dependencies, regenerate it with `bunx expo prebuild --platform ios --clean`.
 
