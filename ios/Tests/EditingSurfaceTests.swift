@@ -255,8 +255,9 @@ final class EditingSurfaceTests: XCTestCase {
     XCTAssertEqual(session.text, "")
     manager.redo()
     XCTAssertEqual(view.text, "Kept")
-    view.selectedRange = NSRange(location: 4, length: 0)
+    XCTAssertEqual(view.selectedRange, NSRange(location: 4, length: 0))
     view.insertText("!")
+    XCTAssertEqual(view.text, "Kept!")
     manager.undo()
     XCTAssertEqual(view.text, "Kept")
     manager.undo()
@@ -313,6 +314,51 @@ final class EditingSurfaceTests: XCTestCase {
     waitUntil { local.isSavedOnThisPhone }
     try harness.runUntilIdle()
     XCTAssertEqual(remote.text, "👋 Left 日本right")
+  }
+
+  func testRedoMovesCaretToTheRedoneEditAfterRemoteChanges() throws {
+    let cases: [(range: Range<Int>, replacement: String, redone: String, typed: String, caret: Int)] = [
+      (5..<5, "🙂", "👋 Left 🙂old right", "👋 Left 🙂!old right", 10),
+      (5..<8, "🙂", "👋 Left 🙂 right", "👋 Left 🙂! right", 10),
+      (5..<8, "", "👋 Left  right", "👋 Left ! right", 8),
+    ]
+    for (index, example) in cases.enumerated() {
+      let local = try replica()
+      let remote = try replica()
+      let harness = DeliveryHarness(seed: 1, faults: .none)
+      try harness.connect(local)
+      try harness.connect(remote)
+      try remote.replaceText(with: "Left old right")
+      waitUntil { remote.isSavedOnThisPhone }
+      try harness.runUntilIdle()
+      let surface = Surface(session: local)
+      let view = surface.textView
+      let start = try XCTUnwrap(view.position(from: view.beginningOfDocument, offset: example.range.lowerBound))
+      let end = try XCTUnwrap(view.position(from: start, offset: example.range.count))
+      view.replace(try XCTUnwrap(view.textRange(from: start, to: end)), withText: example.replacement)
+      let manager = try XCTUnwrap(view.undoManager)
+      manager.undo()
+      waitUntil { local.isSavedOnThisPhone }
+      try harness.runUntilIdle()
+      try remote.replaceText(in: 0..<0, with: "👋 ")
+      waitUntil { remote.isSavedOnThisPhone }
+      try harness.runUntilIdle()
+      view.selectedRange = NSRange(location: 0, length: 3)
+
+      if index == 1 {
+        try local.redo()
+      } else {
+        manager.redo()
+      }
+      XCTAssertEqual(view.text, example.redone, "case \(index)")
+      XCTAssertEqual(view.selectedRange, NSRange(location: example.caret, length: 0), "case \(index)")
+      XCTAssertEqual(local.selection, example.caret..<example.caret, "case \(index)")
+      view.insertText("!")
+      XCTAssertEqual(view.text, example.typed, "case \(index): typing must follow the redone edit")
+      waitUntil { local.isSavedOnThisPhone }
+      try harness.runUntilIdle()
+      XCTAssertEqual(remote.text, example.typed, "case \(index)")
+    }
   }
 }
 

@@ -131,7 +131,7 @@ These results address #6's portion of G6 only. They do not establish the full na
 Result: **pass for plain text** on iOS 26.2 / iPhone 17 simulator (`ExpoNativeNotesModule`, `ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF`), Xcode 27.0.
 
 - Each document session creates one `YUndoManager`, scoped to `body`, after replaying committed updates. Only transactions with the explicit `local` origin enter its history; incoming updates use `remote`. One committed input replacement is one undo step, without time-based grouping.
-- Undo and redo take the engine's incremental update through the same SQLite/outbox/receipt path as typing. They publish text deltas to mounted surfaces, transforming selection and retaining the viewport anchor.
+- Undo and redo take the engine's incremental update through the same SQLite/outbox/receipt path as typing. They publish text deltas to mounted surfaces and retain the viewport anchor. Remote edits and undo transform the current selection; redo collapses the caret after the last reapplied edit, or at the deletion gap when no text was inserted.
 - The text view's `UndoManager` delegates availability and actions to the session. UIKit undo recording stays disabled, including after UIKit clears its native stack. Release UI tests exercise Command-Z, Shift-Command-Z, and the system three-finger double-tap undo gesture after a remote edit; none reverts remote content.
 - Native undo first commits marked input, then undoes that committed action. Direct session commands reject marked input instead of dropping or replacing it.
 - The registry strongly owns open sessions by account/document/lifecycle generation. Releasing the last JavaScript handle or editing surface does not close a session. The provisional JavaScript handle exposes `undo()`, `redo()`, `close()` (promises), plus `canUndo`/`canRedo` in its state and state-change events. Stable editor/hooks signatures remain #19.
@@ -143,20 +143,21 @@ Evidence:
 - Three replicas converge after a local replacement, remote prefix insertion, local undo, another remote insertion, and local redo. Every replica keeps both remote insertions; remote updates neither enter local history nor clear redo.
 - Undoing and redoing one character in the 20,000-character fixture decodes to only that deletion/insertion; each update is under 100 bytes. Reopening keeps the exact committed text and pending operations.
 - Native surface tests cover selective undo/redo and synchronization, remount plus continued typing, direct session commands, close disabling editing, and undo/redo of composition after a deferred remote edit.
+- Redo cursor regressions cover insertion, replacement, and deletion after a remote emoji prefix, with the caret moved elsewhere before redo. Native and direct session redo both restore the UTF-16 caret at the redone edit, and subsequent typing preserves the remote content. Remount coverage no longer manually repairs the cursor before typing.
 - Releasing the last native JavaScript handle preserves session identity and usable history. Explicit close refuses pending/marked input; stale repeated close cannot evict a newly opened session.
-- Release UI tests exercise command buttons, remote-preserving undo/redo, remount with redo pending, and process termination/relaunch: committed content remains, Undo and Redo are disabled.
+- Release UI tests exercise command buttons, remote-preserving undo/redo, remount with redo pending, immediate typing after redo (`Ra!`, not `R!a`), and process termination/relaunch: committed content remains, Undo and Redo are disabled.
 
 Verification from `example/` used `xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme <scheme> -destination 'platform=iOS Simulator,id=ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF' -parallel-testing-enabled NO`; the app scheme used `-configuration Release`.
 
 | Check | Result |
 | --- | --- |
-| `ExpoNativeCollaborativeEditor-Unit-Tests` scheme | 29 passed |
+| `ExpoNativeCollaborativeEditor-Unit-Tests` scheme | 30 passed |
 | `exponativecollaborativeeditorexample` scheme, Release | 5 passed |
 | `bun test ./fixtures` (root) | 14 passed |
 | `bunx tsc --noEmit` for root, example, and fixtures | passed |
 | `bun run build`, `bun run lint` | passed |
 
-Runtime smoke: launched the Release app directly with `simctl launch` on the system-undo test's persisted document. The actual surface showed `Ra`, "Saved on this phone", and disabled Undo/Redo after the new process opened it.
+Runtime smoke: launched the Release app directly with `simctl launch` on the remount/redo typing test's persisted document. The actual surface showed `Ra!`, "Saved on this phone", and disabled Undo/Redo after the new process opened it.
 
 Physical-device shake-to-undo and three-finger gestures remain unverified; simulator gesture/shortcut proof does not replace #18's device checks.
 

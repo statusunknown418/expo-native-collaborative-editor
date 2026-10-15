@@ -150,7 +150,7 @@ final class DocumentSession: ObservableObject {
     }
     persistLocalUpdate()
     updateHistoryAvailability()
-    try publishSurfaceChanges()
+    try publishSurfaceChanges(moveCaretToEditEnd: redo)
   }
 
   private func updateHistoryAvailability() {
@@ -231,20 +231,25 @@ final class DocumentSession: ObservableObject {
     try publishSurfaceChanges()
   }
 
-  private func publishSurfaceChanges() throws {
+  private func publishSurfaceChanges(moveCaretToEditEnd: Bool = false) throws {
     let edits = Self.edits(from: transactionDelta.take() ?? [])
     guard !edits.isEmpty else { return }
 
     text = try SemanticSnapshot(body: body, in: doc).text
-    // A caret sticks to the character before it. A range keeps its own characters: its start sticks
-    // to the character after it, its end to the character before it.
-    var lower = selection.lowerBound
-    var upper = selection.upperBound
-    for edit in edits {
-      lower = edit.transform(lower, sticksToPreceding: selection.isEmpty)
-      upper = edit.transform(upper, sticksToPreceding: true)
+    if moveCaretToEditEnd, let last = edits.last {
+      let caret = last.utf16Offset + last.replacement.utf16.count
+      selection = caret..<caret
+    } else {
+      // A caret sticks to the character before it. A range keeps its own characters: its start sticks
+      // to the character after it, its end to the character before it.
+      var lower = selection.lowerBound
+      var upper = selection.upperBound
+      for edit in edits {
+        lower = edit.transform(lower, sticksToPreceding: selection.isEmpty)
+        upper = edit.transform(upper, sticksToPreceding: true)
+      }
+      selection = lower..<max(lower, upper)
     }
-    selection = lower..<max(lower, upper)
     surfaceChanges.send(edits)
   }
 
