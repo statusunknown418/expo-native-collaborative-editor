@@ -43,7 +43,7 @@ Bun is the only package manager. Commit `bun.lock` changes; do not add other loc
 ## From a clean clone
 
 ```sh
-bun install                 # module deps; `prepare` builds src/ into build/
+bun install                 # module deps; `prepare` builds src/ into build/ and installs Git hooks
 cd example
 bun install
 bun run prebuild            # expo prebuild --platform ios (generates example/ios, runs pod install)
@@ -57,6 +57,20 @@ The example opens the proof screen: a local-only document (`example-account` / `
 From the repository root, run `bun run dev` to watch/rebuild the module's TypeScript and build, install, and launch the example's Debug app with Metro. Bun runs both processes together; Ctrl+C stops them.
 
 Fast Refresh picks up changes to `example/App.tsx` and the module's `src/` (compiled into `build/`, its package entry). Swift changes cannot Fast Refresh: stop and rerun `bun run dev` to rebuild the native app. This uses the custom example app, not Expo Go, which does not contain this module.
+
+## Lint and format
+
+Biome replaces ESLint and Prettier for supported files across the module, example, fixtures, and scripts. It uses the existing style: two-space indentation, 100-column lines, single JavaScript quotes, and ES5 trailing commas. Git-ignored build output, dependencies, and generated native projects are excluded; unsupported files such as Swift and Markdown are skipped.
+
+Run from the repository root:
+
+```sh
+bun run lint                # lint without modifying files
+bun run format              # format supported files
+bun run lint-staged         # manually run the staged-file checks
+```
+
+`bun install` installs the Husky pre-commit hook without replacing the module's existing build step. Each commit runs lint-staged, which applies `biome check --write --no-errors-on-unmatched` only to staged files and stages formatting and safe fixes. Remaining errors block the commit; unsafe fixes are never applied. Unstaged hunks stay unstaged. Full builds and tests are not added to the hook.
 
 ## Native tests
 
