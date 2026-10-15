@@ -41,7 +41,7 @@ Packaging findings:
 
 ## Cross-language fixtures (G2, #4)
 
-Scope: text. The corpus (`fixtures/corpus.json`) covers emoji (skin-tone modifiers, flags, a keycap), ZWJ sequences, combining marks (including a change between canonically equivalent NFD and NFC text), CJK (including a supplementary-plane character), right-to-left Hebrew and Arabic with a directional mark, deleted content followed by insertion at the deletion point, and deletion-only updates ending in an empty document. Marks, lists, checklist states, record references, and the unknown-feature document join the corpus with their tickets.
+Scope: text. The corpus (`fixtures/corpus.json`) covers emoji (skin-tone modifiers, flags, a keycap), ZWJ sequences, combining marks (including a change between canonically equivalent NFD and NFC text), CJK (including a supplementary-plane character), right-to-left Hebrew and Arabic with a directional mark, deleted content followed by insertion at the deletion point, and deletion-only updates ending in an empty document. Formatting joins in [#8's evidence below](#formatting-feature-integration-g2g3g6g12-8); lists, checklist states, record references, and the unknown-feature document join with their tickets.
 
 Result: **pass** for text. Yjs 13.6.33 decodes every update a SwiftYrs 0.7.0 `DocumentSession` committed, and SwiftYrs decodes every update Yjs produced, to identical semantic snapshots after every step; replaying any update changes nothing. Command and layout: [`docs/development.md`](development.md#cross-language-fixtures).
 
@@ -203,9 +203,30 @@ The diagnostic prints every version/order/delivery/replay result and intentional
 ## Local store (#3)
 
 - Library: the system SQLite (`import SQLite3`), no package. One database at `Application Support/ExpoNativeCollaborativeEditor/documents.sqlite`, opened with WAL, `synchronous = FULL`, and `fullfsync = ON`.
-- `documents` holds the account namespace, document ID, lifecycle generation, schema/encoding identifier (`yrs-update-v1/plain-text-0`), and feature manifest as separate columns. Creating a document writes only this row; reopening writes nothing.
+- `documents` holds the account namespace, document ID, lifecycle generation, and provisional schema/encoding identifier (`yrs-update-v1/plain-text-0`) as separate columns. Creating a document writes only this row; ordinary reopening writes no content or outbox operations. #8 moves the unused manifest seed column into the synchronized CRDT `features` map, with a one-time schema upgrade for empty legacy values.
 - Each local edit produces one Yrs v1 update, the update its write transaction emits. It is committed with its outbox operation (a random UUID; a trigger rejects updates to outbox rows) in one `BEGIN IMMEDIATE` transaction on the store's serial queue. "Saved on this phone" is published on the main actor after `COMMIT` returns.
 - Remote updates join `updates` with their delivery position in `deliveries`, never the outbox; reopening replays local and remote updates in commit order.
 - A failed commit is only logged and withholds "Saved on this phone" for the rest of the session, even after later commits succeed. Retaining the input, rejecting further edits, the host error callback, and retry are #13.
 - Engine access and published state stay on the main actor; commits run on the storage queue; the editing surface updates on the main thread.
 - Content is not yet encrypted (#12) and is never compacted: reopening replays every stored update, one per edit.
+
+## Formatting feature integration (G2/G3/G6/G12, #8)
+
+Formatting-scope checks pass on iOS 26.2 / iPhone 17 simulator `ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF`, named `ExpoNativeNotesModule`, with Xcode 27.0. No additional simulators or test clones were created. Lists/checklists and record-reference plugin gates remain with their own tickets.
+
+- Explicit JavaScript `formattingPlugin` registration carries normalized typed options. Native capability/version, unique-ID/capability, and option validation reject unsupported or malformed configurations before changing a session. The Expo boundary classifies these as `ERR_EDITOR_CONFIGURATION`.
+- `FormattingTests` exercises enabled/disabled commands, rejected configuration without content/outbox changes, mixed selection state, Unicode scalar boundaries, heading paragraph expansion, typing attributes without speculative document writes, and undo/redo across option changes. Reopening retains marks and the monotonic CRDT feature manifest; undo history still resets.
+- Applying bold to UTF-16 range 10,000–10,003 in a 20,000-character document decodes to retain 10,000 followed by retain 3 with `bold: true`, with no inserted or deleted text; the incremental update is under 200 bytes, including the first semantic feature declaration.
+- Twenty recorded seeds (1–20) run three replicas through concurrent text, bold, italic, and heading changes with delayed, duplicated, reordered, and dropped-then-redelivered transport. One replica has formatting authoring disabled. Semantic snapshots converge, replay is idempotent, stores reopen to the same snapshot, and receipts drain pending work. The accepted causal-feed restriction in ADR 0007 still applies.
+- A deterministic concurrent format/delete regression first failed: the deleting replica's semantic snapshot missed a manifest-only update because the old publication path returned on an empty body delta. Snapshots now refresh for manifest changes even when no surface patch is needed.
+- `EditingSurfaceTests` drives actual native input and checks rendered bold/italic/heading fonts, supported rendering after plugin disable/remount, undo, selection preservation through a remote mark-only change, and committed typing marks after remote formatting during marked-text composition.
+- The example's Release UI suite types bold/italic/heading text, changes selected marks, disables and re-enables authoring, undoes/redoes across configuration and remount, and relaunches to persisted formatting. Selected button styles and accessibility values track session state. Its retained screenshot shows `Rich text` as a bold heading with Bold/Heading selected and Italic off.
+- The corpus adds a ten-step `marks` scenario: overlap, headings, Unicode insertion, mark removal, and deletion with retained feature requirements. SwiftYrs 0.7.0 and Yjs 13.6.33 decode both origins after every step and duplicate replay; all 16 JavaScript corpus cases pass.
+- A regression caught heading changes restoring inline typing marks that had been explicitly switched off. Heading commands now retain independently chosen collapsed-caret bold/italic state.
+- The legacy empty SQLite manifest field upgrades without losing text or pending operations. Nonempty legacy requirements reject the upgrade and remain stored rather than being discarded.
+
+Reproduction: run the explicit-UDID native and Release UI commands in [`development.md`](development.md#native-tests), plus `bun test fixtures` from the repository root. API, semantic encoding, option behavior, and manifest upgrade are documented in [Formatting feature plugin](development.md#formatting-feature-plugin-provisional-8). No encryption, production-sync, or physical-iPhone performance result is implied by this ticket.
+
+Final verification on 2026-10-15: 41/41 native tests, 6/6 Release UI tests, 16/16 JavaScript fixture cases; module build, module lint, example typecheck, and fixture typecheck pass. A throwaway Bun assertion also verifies option normalization without modifying the host's heading-level array.
+
+Manual smoke after the final suites: launched the installed Release app directly with `simctl launch --terminate-running-process` on the same UDID, reopening the formatting document created by the UI scenario. The captured native surface restores the bold heading, shows matching Bold/Heading selection with Italic off and “Saved on this phone,” and has empty undo/redo history after process restart.

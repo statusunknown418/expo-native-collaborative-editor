@@ -51,7 +51,20 @@ final class FixtureCorpusTests: XCTestCase {
     for (name, steps) in corpus where recorded[name] == nil {
       let store = try DocumentStore(url: temporaryStoreURL())
       let session = try DocumentSessionRegistry(store: store).session(accountNamespace: "fixtures", documentID: name)
-      for step in steps { try session.replaceText(with: step.text) }
+      try session.setPlugins(formattingPlugins())
+      for (index, step) in steps.enumerated() {
+        switch (name, index) {
+        case ("marks", 1): session.selection = 0..<4; try session.toggleBold()
+        case ("marks", 2): session.selection = 5..<11; try session.toggleItalic()
+        case ("marks", 3): session.selection = 12..<19; try session.setHeading(1)
+        case ("marks", 4): session.selection = 0..<4; try session.toggleItalic()
+        case ("marks", 5): try session.replaceText(in: 2..<2, with: "👍")
+        case ("marks", 6): session.selection = 0..<6; try session.toggleBold()
+        case ("marks", 7): session.selection = 0..<6; try session.toggleItalic()
+        case ("marks", 8): session.selection = 14..<21; try session.setHeading(0)
+        default: try session.replaceText(with: step.text)
+        }
+      }
       waitUntil { session.isSavedOnThisPhone }
       recorded[name] = try store.outbox(for: session.metadata.key).map(\.update)
     }

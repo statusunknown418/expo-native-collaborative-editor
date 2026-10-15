@@ -8,6 +8,86 @@ import XCTest
 
 @MainActor
 final class EditingSurfaceTests: XCTestCase {
+  func testFormattingCommandsAndTypingAttributesReachTheNativeSurface() throws {
+    let session = try replica()
+    try session.setPlugins(formattingPlugins())
+    let surface = Surface(session: session)
+    let view = surface.textView
+    try session.toggleBold()
+    try session.toggleItalic()
+    try session.setHeading(1)
+    view.insertText("Title")
+    XCTAssertEqual(session.snapshot.marks, [
+      SemanticMark(offset: 0, length: 5, formatting: TextFormatting(bold: true, italic: true, heading: 1))
+    ])
+    let font = try XCTUnwrap(view.textStorage.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+    XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains([.traitBold, .traitItalic]))
+    XCTAssertGreaterThan(font.pointSize, UIFont.preferredFont(forTextStyle: .body).pointSize)
+    view.selectedRange = NSRange(location: 0, length: 5)
+    try session.toggleBold()
+    XCTAssertEqual(session.selectedFormatting.bold, false)
+    try session.setPlugins(FeaturePlugins())
+    surface.window.isHidden = true
+    let remounted = Surface(session: session)
+    let remountedFont = try XCTUnwrap(remounted.textView.textStorage.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+    XCTAssertTrue(remountedFont.fontDescriptor.symbolicTraits.contains(.traitItalic))
+    XCTAssertGreaterThan(remountedFont.pointSize, UIFont.preferredFont(forTextStyle: .body).pointSize)
+    try session.undo()
+    XCTAssertEqual(session.snapshot.formatting(at: 0).bold, true)
+    waitUntil { session.isSavedOnThisPhone }
+  }
+
+  func testRemoteFormattingOnlyUpdatePreservesSelectionAndRefreshesFonts() throws {
+    let local = try replica()
+    let remote = try replica()
+    try remote.setPlugins(formattingPlugins())
+    let harness = DeliveryHarness(seed: 8, faults: .unreliable)
+    for session in [local, remote] { try harness.connect(session) }
+    try local.replaceText(with: "Left right")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    let surface = Surface(session: local)
+    surface.textView.selectedRange = NSRange(location: 0, length: 4)
+    remote.selection = 0..<4
+    try remote.toggleItalic()
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(surface.textView.selectedRange, NSRange(location: 0, length: 4))
+    XCTAssertEqual(local.selectedFormatting.italic, true)
+    let font = try XCTUnwrap(surface.textView.textStorage.attribute(.font, at: 1, effectiveRange: nil) as? UIFont)
+    XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.traitItalic))
+    XCTAssertEqual(surface.textView.text, "Left right")
+  }
+
+  func testRemoteFormattingDuringCompositionPreservesProvisionalTypingMarks() throws {
+    let local = try replica()
+    let remote = try replica()
+    for session in [local, remote] { try session.setPlugins(formattingPlugins()) }
+    let harness = DeliveryHarness(seed: 3, faults: .none)
+    for session in [local, remote] { try harness.connect(session) }
+    try local.replaceText(with: "Left right")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    let surface = Surface(session: local)
+    let view = surface.textView
+    view.selectedRange = NSRange(location: 5, length: 0)
+    try local.toggleBold()
+    view.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+    remote.selection = 0..<4
+    try remote.toggleItalic()
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(view.text(in: try XCTUnwrap(view.markedTextRange)), "に")
+    view.insertText("日本")
+    XCTAssertEqual(local.text, "Left 日本right")
+    XCTAssertEqual(local.snapshot.formatting(at: 5).bold, true)
+    let left = try XCTUnwrap(view.textStorage.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+    XCTAssertTrue(left.fontDescriptor.symbolicTraits.contains(.traitItalic))
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(remote.snapshot, local.snapshot)
+  }
+
   func testMarkedTextStaysOutOfTheDocumentUntilOneIncrementalCommit() throws {
     let storage = DispatchQueue(label: "test.composition.storage")
     let session = try DocumentSessionRegistry(store: DocumentStore(url: temporaryStoreURL(), queue: storage))

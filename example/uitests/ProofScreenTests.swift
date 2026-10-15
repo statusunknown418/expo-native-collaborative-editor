@@ -1,6 +1,55 @@
 import XCTest
 
 final class ProofScreenTests: XCTestCase {
+  func testFormattingToolbarTypingSelectionRuntimeOptionsAndUndo() {
+    let app = XCUIApplication()
+    app.launchArguments = ["-documentId", "formatting-\(UUID().uuidString)"]
+    app.launch()
+    let editor = app.textViews["editing-surface"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 30))
+    editor.tap()
+    app.buttons["Bold"].tap()
+    waitForValue("On", in: app.buttons["Bold"])
+    app.buttons["Italic"].tap()
+    waitForValue("On", in: app.buttons["Italic"])
+    app.buttons["Heading"].tap()
+    waitForValue("Level 1", in: app.buttons["Heading"])
+    editor.typeText("Rich text")
+    waitForValue("Rich text", in: editor)
+    XCTAssertTrue(app.staticTexts["Saved on this phone"].waitForExistence(timeout: 10))
+    editor.typeKey("a", modifierFlags: .command)
+    app.buttons["Italic"].tap()
+    waitForValue("Off", in: app.buttons["Italic"])
+    app.buttons["Disable formatting"].tap()
+    XCTAssertTrue(app.buttons["Enable formatting"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Bold"].isEnabled)
+    waitForValue("Rich text", in: editor)
+    app.buttons["Undo"].tap()
+    waitForValue("On", in: app.buttons["Italic"])
+    app.buttons["Hide editor"].tap()
+    app.buttons["Show editor"].tap()
+    XCTAssertTrue(editor.waitForExistence(timeout: 5))
+    waitForValue("Rich text", in: editor)
+    waitForValue("Level 1", in: app.buttons["Heading"])
+    app.buttons["Enable formatting"].tap()
+    XCTAssertTrue(app.buttons["Disable formatting"].waitForExistence(timeout: 5))
+    app.buttons["Redo"].tap()
+    waitForValue("Off", in: app.buttons["Italic"])
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    XCTAssertTrue(app.staticTexts["Saved on this phone"].waitForExistence(timeout: 10))
+    app.terminate()
+    app.launch()
+    XCTAssertTrue(editor.waitForExistence(timeout: 30))
+    waitForValue("Rich text", in: editor)
+    editor.tap()
+    editor.typeKey("a", modifierFlags: .command)
+    waitForValue("On", in: app.buttons["Bold"])
+    waitForValue("Off", in: app.buttons["Italic"])
+    waitForValue("Level 1", in: app.buttons["Heading"])
+  }
+
   func testTypedTextIsSavedOnThisPhoneAndSurvivesRelaunch() {
     let app = XCUIApplication()
     // A fresh document per run; the example reads it from NSUserDefaults.

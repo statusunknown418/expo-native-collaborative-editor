@@ -1,5 +1,7 @@
 import { NativeModule, requireNativeModule, SharedObject } from 'expo';
 
+import type { FeaturePlugin, HeadingLevel, NativeCapabilities } from './FeaturePlugins';
+
 // Provisional session API; the stable editor/hooks API belongs to #19.
 
 export type DocumentSessionState = {
@@ -14,6 +16,12 @@ export type DocumentSessionState = {
   canUndo: boolean;
   /** Whether this open session has an undone local edit available to redo. */
   canRedo: boolean;
+  /** null means mixed; heading 0 means ordinary paragraphs. */
+  selectedFormatting: {
+    bold: boolean | null;
+    italic: boolean | null;
+    heading: HeadingLevel | 0 | null;
+  };
 };
 
 export type DocumentSessionEvents = {
@@ -23,6 +31,13 @@ export type DocumentSessionEvents = {
 /** Handle to a shared native document session. It carries state, never document content. */
 export declare class DocumentSession extends SharedObject<DocumentSessionEvents> {
   readonly state: DocumentSessionState;
+  /** Replaces authoring configuration atomically; content and history remain untouched. */
+  setPlugins(plugins: readonly FeaturePlugin[]): Promise<void>;
+  /** Toggles selection marks, or typing attributes when selection is collapsed. */
+  toggleBold(): Promise<void>;
+  toggleItalic(): Promise<void>;
+  /** Formats every selected paragraph; 0 restores ordinary paragraphs. */
+  setHeading(level: HeadingLevel | 0): Promise<void>;
   /** Undoes the latest local edit without undoing remote changes. Rejects marked input. */
   undo(): Promise<void>;
   /** Redoes the latest undone local edit. Rejects marked input. */
@@ -37,15 +52,25 @@ export declare class DocumentSession extends SharedObject<DocumentSessionEvents>
 export type OpenDocumentOptions = {
   accountNamespace: string;
   documentId: string;
+  /** No authoring plugins are enabled implicitly. */
+  plugins?: readonly FeaturePlugin[];
 };
 
 declare class ExpoNativeCollaborativeEditorModule extends NativeModule {
-  openDocument(accountNamespace: string, documentId: string): Promise<DocumentSession>;
+  readonly capabilities: NativeCapabilities;
+  openDocument(
+    accountNamespace: string,
+    documentId: string,
+    plugins: readonly FeaturePlugin[]
+  ): Promise<DocumentSession>;
 }
 
 const nativeModule = requireNativeModule<ExpoNativeCollaborativeEditorModule>(
   'ExpoNativeCollaborativeEditor'
 );
+
+/** The capabilities actually compiled into this native build, not a JavaScript wish list. */
+export const nativeCapabilities: NativeCapabilities = nativeModule.capabilities;
 
 /**
  * Opens the latest lifecycle generation of a document in an account namespace, creating the document
@@ -54,6 +79,7 @@ const nativeModule = requireNativeModule<ExpoNativeCollaborativeEditorModule>(
 export function openDocument({
   accountNamespace,
   documentId,
+  plugins = [],
 }: OpenDocumentOptions): Promise<DocumentSession> {
-  return nativeModule.openDocument(accountNamespace, documentId);
+  return nativeModule.openDocument(accountNamespace, documentId, plugins);
 }

@@ -13,8 +13,6 @@ struct DocumentMetadata: Equatable, Sendable {
   let key: DocumentKey
   /// Schema and update encoding of the stored content.
   let schemaID: String
-  /// Semantic features the content uses.
-  let featureManifest: [String]
 }
 
 /// A committed local update waiting for synchronization. The operation ID never changes once stored.
@@ -31,7 +29,8 @@ struct DocumentStoreError: Error, CustomStringConvertible {
 /// SQLite store (the system `libsqlite3`) for document metadata, engine updates, the outbox, and
 /// delivery positions. Every statement runs on `queue`, the serial storage executor.
 final class DocumentStore: @unchecked Sendable {
-  /// Yrs v1 updates to a single `YText` named `body`. Not frozen until the document representation is.
+  /// Yrs v1 updates to linear rich text `body` and its semantic `features` map. The original schema
+  /// identifier remains while the M1 document representation is provisional.
   static let plainTextSchemaID = "yrs-update-v1/plain-text-0"
 
   private let db: OpaquePointer
@@ -52,7 +51,23 @@ final class DocumentStore: @unchecked Sendable {
     }
     db = handle
     self.queue = queue
-    try queue.sync { try execute(Self.schema) }
+    try queue.sync {
+      try execute(Self.schema)
+      // The manifest now travels in the CRDT, not an unsynchronized SQLite seed field.
+      var hasLegacyManifest = false
+      try run("PRAGMA table_info(documents)", []) {
+        if String(cString: sqlite3_column_text($0, 1)) == "feature_manifest" { hasLegacyManifest = true }
+      }
+      if hasLegacyManifest {
+        try run("SELECT feature_manifest FROM documents", []) {
+          let data = Data(String(cString: sqlite3_column_text($0, 0)).utf8)
+          guard try JSONDecoder().decode([String].self, from: data).isEmpty else {
+            throw DocumentStoreError(code: SQLITE_MISMATCH, description: "Cannot discard a nonempty legacy feature manifest.")
+          }
+        }
+        try execute("ALTER TABLE documents DROP COLUMN feature_manifest")
+      }
+    }
   }
 
   deinit {
@@ -66,7 +81,7 @@ final class DocumentStore: @unchecked Sendable {
       var existing: DocumentMetadata?
       try run(
         """
-        SELECT lifecycle_generation, schema_id, feature_manifest FROM documents
+        SELECT lifecycle_generation, schema_id FROM documents
         WHERE account_namespace = ? AND document_id = ?
         ORDER BY lifecycle_generation DESC LIMIT 1
         """,
@@ -76,26 +91,20 @@ final class DocumentStore: @unchecked Sendable {
           key: DocumentKey(
             accountNamespace: accountNamespace, documentID: documentID,
             lifecycleGeneration: Int(sqlite3_column_int64(row, 0))),
-          schemaID: String(cString: sqlite3_column_text(row, 1)),
-          featureManifest: try JSONDecoder().decode(
-            [String].self, from: Data(String(cString: sqlite3_column_text(row, 2)).utf8)))
+          schemaID: String(cString: sqlite3_column_text(row, 1)))
       }
       if let existing { return existing }
 
       let created = DocumentMetadata(
         key: DocumentKey(accountNamespace: accountNamespace, documentID: documentID, lifecycleGeneration: 1),
-        schemaID: Self.plainTextSchemaID,
-        featureManifest: [])
+        schemaID: Self.plainTextSchemaID)
       try run(
         """
         INSERT INTO documents
-        (account_namespace, document_id, lifecycle_generation, schema_id, feature_manifest)
-        VALUES (?, ?, ?, ?, ?)
+        (account_namespace, document_id, lifecycle_generation, schema_id)
+        VALUES (?, ?, ?, ?)
         """,
-        Self.keyBindings(created.key) + [
-          .text(created.schemaID),
-          .text(String(decoding: try JSONEncoder().encode(created.featureManifest), as: UTF8.self)),
-        ])
+        Self.keyBindings(created.key) + [.text(created.schemaID)])
       return created
     }
   }
@@ -243,7 +252,6 @@ final class DocumentStore: @unchecked Sendable {
       document_id TEXT NOT NULL,
       lifecycle_generation INTEGER NOT NULL,
       schema_id TEXT NOT NULL,
-      feature_manifest TEXT NOT NULL,
       PRIMARY KEY (account_namespace, document_id, lifecycle_generation)
     ) STRICT;
     CREATE TABLE IF NOT EXISTS updates (

@@ -8,11 +8,15 @@ private let logger = Logger(subsystem: "expo.modules.nativecollaborativeeditor",
 enum DocumentSessionError: LocalizedError {
   case closed
   case unsavedInput
+  case invalidRange
+  case featureDisabled
 
   var errorDescription: String? {
     switch self {
     case .closed: "The document session is closed."
     case .unsavedInput: "The document session still has unsaved input."
+    case .invalidRange: "The editing range must lie on Unicode scalar boundaries inside the document."
+    case .featureDisabled: "The formatting authoring capability is not enabled."
     }
   }
 }
@@ -26,6 +30,13 @@ final class DocumentSession: ObservableObject {
   let metadata: DocumentMetadata
   /// Plain-text projection of the engine state.
   @Published private(set) var text: String
+  private(set) var snapshot: SemanticSnapshot
+  var featureManifest: [String] { snapshot.features ?? [] }
+  private(set) var plugins: FeaturePlugins
+  @Published private(set) var selectedFormatting = SelectedFormatting()
+  private(set) var typingFormatting = TextFormatting()
+  /// Typing attributes can change without producing a document transaction.
+  let typingFormattingChanges = PassthroughSubject<Void, Never>()
   @Published private(set) var canUndo = false
   @Published private(set) var canRedo = false
   @Published private(set) var isClosed = false
@@ -46,7 +57,12 @@ final class DocumentSession: ObservableObject {
   let committedOperations = PassthroughSubject<OutboxOperation, Never>()
   /// The editing surface's selection, in UTF-16 offsets into `text`. Transient: remote changes move
   /// it with the text it selects, and it is never stored.
-  var selection = 0..<0
+  var selection = 0..<0 {
+    didSet {
+      guard selection != oldValue else { return }
+      updateSelectedFormatting(resetTyping: true)
+    }
+  }
   /// Each remote or history change once `text` and `selection` reflect it: the edits it made, in
   /// order, each offset into the text the edits before it produced.
   let surfaceChanges = PassthroughSubject<[TextEdit], Never>()
@@ -56,6 +72,7 @@ final class DocumentSession: ObservableObject {
   private let store: DocumentStore
   private let doc: YDoc
   private let body: YText
+  private let manifest: YMap
   private let undoHistory: YUndoManager
   private let transactionUpdate = Capture<Data>()
   private let transactionDelta = Capture<[YTextDeltaOperation]>()
@@ -71,17 +88,20 @@ final class DocumentSession: ObservableObject {
   // ponytail: unbounded; a real sync adapter pages its feed, which bounds this.
   private var earlyDeliveries: [Int: Data] = [:]
 
-  fileprivate init(metadata: DocumentMetadata, store: DocumentStore, clientID: UInt64?) throws {
+  fileprivate init(metadata: DocumentMetadata, store: DocumentStore, clientID: UInt64?, plugins: FeaturePlugins) throws {
     self.metadata = metadata
     self.store = store
+    self.plugins = plugins
     doc = clientID.map { YDoc(clientID: $0) } ?? YDoc()
     let body = try doc.text(named: "body")
     self.body = body
+    manifest = try doc.map(named: "features")
     let updates = try store.updates(for: metadata.key)
     try doc.write { transaction in
       for update in updates { try transaction.apply(.v1(update)) }
     }
-    text = try SemanticSnapshot(body: body, in: doc).text
+    snapshot = try SemanticSnapshot(body: body, in: doc)
+    text = snapshot.text
     hasPendingSynchronization = !(try store.outbox(for: metadata.key).isEmpty)
     deliveredThrough = try store.deliveredThrough(metadata.key)
     // Replayed content is committed state, never part of this session's undo history.
@@ -97,6 +117,7 @@ final class DocumentSession: ObservableObject {
         if case .shared(let change) = event { transactionDelta.value = change.delta }
       },
     ]
+    updateSelectedFormatting(resetTyping: true)
   }
 
   /// Applies a local edit, given as the surface's whole new text, as one engine transaction and
@@ -114,21 +135,119 @@ final class DocumentSession: ObservableObject {
   }
 
   private func commit(_ edit: TextEdit) throws {
-    try requireOpen()
-    let offset = UInt32(edit.utf16Offset)
-    try doc.write(origin: "local") { transaction in
+    let range = edit.utf16Offset..<(edit.utf16Offset + edit.utf16Length)
+    try validate(range)
+    let formatting = range == selection ? typingFormatting : inheritedFormatting(at: range.lowerBound)
+    try transact { transaction in
+      let offset = UInt32(edit.utf16Offset)
       if edit.utf16Length > 0 {
         try transaction.remove(from: body, at: offset, length: UInt32(edit.utf16Length))
       }
       if !edit.replacement.isEmpty {
-        try transaction.insert(edit.replacement, into: body, at: offset)
+        try transaction.insert(edit.replacement, into: body, at: offset, attributes: formatting.attributes)
+        try recordFeatures(formatting.features, in: transaction)
       }
     }
-    // One committed input replacement is one action; remote transactions never join it.
+  }
+
+  /// Every plugin mutation uses this same core transaction, undo, and persistence path.
+  private func transact(_ mutation: (YWriteTransaction) throws -> Void) throws {
+    try requireOpen()
+    _ = transactionDelta.take()
+    try doc.write(origin: "local") { try mutation($0) }
     undoHistory.stopCapturing()
-    text = try SemanticSnapshot(body: body, in: doc).text
+    snapshot = try SemanticSnapshot(body: body, in: doc)
+    text = snapshot.text
     persistLocalUpdate()
     updateHistoryAvailability()
+  }
+
+  func setPlugins(_ plugins: FeaturePlugins) throws {
+    try requireOpen()
+    self.plugins = plugins
+  }
+
+  func toggleBold() throws {
+    guard plugins.formatting?.bold == true else { throw DocumentSessionError.featureDisabled }
+    try setInlineFormat("bold", enabled: selectedFormatting.bold != true)
+  }
+
+  func toggleItalic() throws {
+    guard plugins.formatting?.italic == true else { throw DocumentSessionError.featureDisabled }
+    try setInlineFormat("italic", enabled: selectedFormatting.italic != true)
+  }
+
+  private func setInlineFormat(_ key: String, enabled: Bool) throws {
+    try requireOpen()
+    guard !hasMarkedText else { throw DocumentSessionError.unsavedInput }
+    try validate(selection)
+    if selection.isEmpty {
+      if key == "bold" { typingFormatting.bold = enabled } else { typingFormatting.italic = enabled }
+      updateSelectedFormatting()
+      return
+    }
+    try transact { transaction in
+      try transaction.format(body, at: UInt32(selection.lowerBound), length: UInt32(selection.count),
+        attributes: [key: enabled ? .bool(true) : .null])
+      if enabled { try recordFeatures(["formatting.\(key)@1"], in: transaction) }
+    }
+    updateSelectedFormatting(resetTyping: true)
+    surfaceChanges.send([])
+  }
+
+  /// Headings apply to whole paragraphs touched by the selection; an empty paragraph uses typing
+  /// attributes until text exists. No hidden characters or whole-document replacements.
+  func setHeading(_ level: Int) throws {
+    try requireOpen()
+    guard let options = plugins.formatting,
+      level == 0 || options.headingLevels.contains(level)
+    else { throw DocumentSessionError.featureDisabled }
+    guard !hasMarkedText else { throw DocumentSessionError.unsavedInput }
+    try validate(selection)
+    let string = text as NSString
+    let range = string.paragraphRange(for: NSRange(selection))
+    if range.length > 0 {
+      try transact { transaction in
+        try transaction.format(body, at: UInt32(range.location), length: UInt32(range.length),
+          attributes: ["heading": level == 0 ? .null : .int(Int64(level))])
+        if level > 0 { try recordFeatures(["formatting.heading@1"], in: transaction) }
+      }
+      if !selection.isEmpty { typingFormatting = snapshot.formatting(at: selection.lowerBound) }
+    }
+    typingFormatting.heading = level
+    updateSelectedFormatting()
+    if range.length > 0 { surfaceChanges.send([]) }
+  }
+
+  private func recordFeatures(_ features: [String], in transaction: YWriteTransaction) throws {
+    for feature in features where !featureManifest.contains(feature) {
+      try transaction.set(.int(1), forKey: feature, in: manifest)
+    }
+  }
+
+  private func validate(_ range: Range<Int>) throws {
+    guard range.lowerBound >= 0, range.upperBound <= text.utf16.count,
+      String.Index(utf16Offset: range.lowerBound, in: text).samePosition(in: text.unicodeScalars) != nil,
+      String.Index(utf16Offset: range.upperBound, in: text).samePosition(in: text.unicodeScalars) != nil
+    else { throw DocumentSessionError.invalidRange }
+  }
+
+  private func inheritedFormatting(at offset: Int) -> TextFormatting {
+    let offset = min(max(0, offset), text.utf16.count)
+    // At a new paragraph use its first character, not the preceding paragraph's separator.
+    let previous = max(0, offset - 1)
+    let atParagraphStart = offset == 0 || (text as NSString).character(at: previous) == 10
+    return snapshot.formatting(at: atParagraphStart ? offset : previous)
+  }
+
+  private func updateSelectedFormatting(resetTyping: Bool = false) {
+    if resetTyping && !hasMarkedText {
+      typingFormatting = selection.isEmpty
+        ? inheritedFormatting(at: selection.lowerBound) : snapshot.formatting(at: selection.lowerBound)
+    }
+    selectedFormatting = selection.isEmpty
+      ? SelectedFormatting(typingFormatting) : snapshot.selectedFormatting(in: selection)
+    typingFormattingChanges.send()
   }
 
   func undo() throws {
@@ -142,6 +261,7 @@ final class DocumentSession: ObservableObject {
   private func changeHistory(redo: Bool) throws {
     try requireOpen()
     guard !hasMarkedText else { throw DocumentSessionError.unsavedInput }
+    guard redo ? canRedo : canUndo else { return }
     _ = transactionDelta.take()
     if redo {
       _ = try undoHistory.redo()
@@ -228,16 +348,19 @@ final class DocumentSession: ObservableObject {
   private func applyRemote(_ update: Data) throws {
     _ = transactionDelta.take()
     try doc.write(origin: "remote") { try $0.apply(.v1(update)) }
-    _ = transactionUpdate.take()  // A remote update, not a local one to commit.
+    // A remote update, not a local one to commit. Replays need no projection or surface work.
+    guard transactionUpdate.take() != nil else { return }
     updateHistoryAvailability()
     try publishSurfaceChanges()
   }
 
   private func publishSurfaceChanges(moveCaretToEditEnd: Bool = false) throws {
-    let edits = Self.edits(from: transactionDelta.take() ?? [])
-    guard !edits.isEmpty else { return }
-
-    text = try SemanticSnapshot(body: body, in: doc).text
+    let delta = transactionDelta.take() ?? []
+    // Concurrent deletion can make a mark update change only the semantic feature manifest.
+    snapshot = try SemanticSnapshot(body: body, in: doc)
+    guard !delta.isEmpty else { return }
+    let edits = Self.edits(from: delta)
+    text = snapshot.text
     if moveCaretToEditEnd, let last = edits.last {
       let caret = last.utf16Offset + last.replacement.utf16.count
       selection = caret..<caret
@@ -252,6 +375,7 @@ final class DocumentSession: ObservableObject {
       }
       selection = lower..<max(lower, upper)
     }
+    updateSelectedFormatting(resetTyping: true)
     surfaceChanges.send(edits)
   }
 
@@ -302,10 +426,13 @@ final class DocumentSessionRegistry {
   ///
   /// Each session needs an engine client ID no other session of the document has used; by default it
   /// is random. Tests fix it, because concurrent insertions at one position order by client ID.
-  func session(accountNamespace: String, documentID: String, clientID: UInt64? = nil) throws -> DocumentSession {
+  func session(accountNamespace: String, documentID: String, clientID: UInt64? = nil, plugins: FeaturePlugins? = nil) throws -> DocumentSession {
     let metadata = try store.openOrCreateDocument(accountNamespace: accountNamespace, documentID: documentID)
-    if let live = sessions[metadata.key] { return live }
-    let session = try DocumentSession(metadata: metadata, store: store, clientID: clientID)
+    if let live = sessions[metadata.key] {
+      if let plugins { try live.setPlugins(plugins) }
+      return live
+    }
+    let session = try DocumentSession(metadata: metadata, store: store, clientID: clientID, plugins: plugins ?? FeaturePlugins())
     sessions[metadata.key] = session
     return session
   }

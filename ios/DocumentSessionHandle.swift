@@ -9,11 +9,13 @@ final class DocumentSessionHandle: SharedObject, @unchecked Sendable {
     var pendingSynchronization: Bool
     var canUndo: Bool
     var canRedo: Bool
+    var selectedFormatting: SelectedFormatting
 
     var payload: [String: Any] {
       [
         "savedOnThisPhone": savedOnThisPhone, "pendingSynchronization": pendingSynchronization,
         "canUndo": canUndo, "canRedo": canRedo,
+        "selectedFormatting": selectedFormatting.payload,
       ]
     }
   }
@@ -29,11 +31,15 @@ final class DocumentSessionHandle: SharedObject, @unchecked Sendable {
     published = Mutex(
       State(
         savedOnThisPhone: session.isSavedOnThisPhone, pendingSynchronization: session.hasPendingSynchronization,
-        canUndo: session.canUndo, canRedo: session.canRedo))
+        canUndo: session.canUndo, canRedo: session.canRedo, selectedFormatting: session.selectedFormatting))
     super.init()
     stateSubscription = session.$isSavedOnThisPhone.combineLatest(
       session.$hasPendingSynchronization, session.$canUndo, session.$canRedo)
-      .map(State.init)
+      .combineLatest(session.$selectedFormatting)
+      .map { status, formatting in
+        State(savedOnThisPhone: status.0, pendingSynchronization: status.1,
+          canUndo: status.2, canRedo: status.3, selectedFormatting: formatting)
+      }
       .dropFirst()
       .removeDuplicates()
       .sink { [weak self] state in

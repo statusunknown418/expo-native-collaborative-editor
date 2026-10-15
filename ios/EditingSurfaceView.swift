@@ -53,12 +53,14 @@ struct CollaborativeTextView: UIViewRepresentable {
     private weak var textView: UITextView?
     private var surfaceChanges: AnyCancellable?
     private var closedChanges: AnyCancellable?
+    private var typingChanges: AnyCancellable?
     private var isApplyingRemoteChange = false
     /// One replacement from committed document coordinates to the surface's uncommitted text.
     private var pendingRange: Range<Int>?
     private var pendingLength = 0
     /// UITextView clears marked text on storage patches. Keep the input system untouched until commit.
     private var deferredRemoteEdits: [TextEdit] = []
+    private var hasDeferredRemoteChanges = false
 
     init(session: DocumentSession) {
       self.session = session
@@ -69,6 +71,7 @@ struct CollaborativeTextView: UIViewRepresentable {
       isApplyingRemoteChange = true
       textView.text = session.text
       textView.selectedRange = NSRange(session.selection)
+      renderFormatting(in: textView)
       isApplyingRemoteChange = false
       textView.delegate = self
       textView.textStorage.delegate = self
@@ -82,6 +85,10 @@ struct CollaborativeTextView: UIViewRepresentable {
         }
       }
       surfaceChanges = session.surfaceChanges.sink { [weak self] in self?.apply($0) }
+      typingChanges = session.typingFormattingChanges.sink { [weak self, weak textView] in
+        guard let self, let textView, textView.markedTextRange == nil else { return }
+        self.applyTypingAttributes(to: textView)
+      }
       closedChanges = session.$isClosed.sink { [weak textView] in textView?.isEditable = !$0 }
     }
 
@@ -90,6 +97,8 @@ struct CollaborativeTextView: UIViewRepresentable {
       surfaceChanges = nil
       closedChanges?.cancel()
       closedChanges = nil
+      typingChanges?.cancel()
+      typingChanges = nil
       textView.delegate = nil
       textView.textStorage.delegate = nil
       (textView as? InputTextView)?.didFinishInput = nil
@@ -195,9 +204,12 @@ struct CollaborativeTextView: UIViewRepresentable {
       }
       session.hasMarkedText = false
       session.selection = selection
-      if !deferredRemoteEdits.isEmpty {
+      if hasDeferredRemoteChanges {
+        hasDeferredRemoteChanges = false
         deferredRemoteEdits.removeAll(keepingCapacity: true)
         apply(surfaceEdits)
+      } else {
+        applyTypingAttributes(to: textView)
       }
     }
 
@@ -214,6 +226,7 @@ struct CollaborativeTextView: UIViewRepresentable {
       guard let textView else { return }
       if textView.markedTextRange != nil {
         deferredRemoteEdits.append(contentsOf: edits)
+        hasDeferredRemoteChanges = true
         return
       }
       let insets = textView.adjustedContentInset
@@ -236,7 +249,9 @@ struct CollaborativeTextView: UIViewRepresentable {
           with: NSAttributedString(string: edit.replacement, attributes: textView.typingAttributes))
       }
       storage.endEditing()
+      renderFormatting(in: textView)
       textView.selectedRange = NSRange(session.selection)
+      applyTypingAttributes(to: textView)
 
       guard let anchor else { return }
       // Text inserted right before the anchor lands above the visible area.
@@ -246,10 +261,48 @@ struct CollaborativeTextView: UIViewRepresentable {
       textView.contentOffset.y = min(max(top(of: moved, in: textView) - anchor.onScreen, -insets.top), maxOffset)
     }
 
+    private func applyTypingAttributes(to textView: UITextView) {
+      textView.typingAttributes = [
+        .font: session.typingFormatting.font, .foregroundColor: UIColor.label,
+      ]
+    }
+
+    private func renderFormatting(in textView: UITextView) {
+      guard textView.markedTextRange == nil else { return }
+      let storage = textView.textStorage
+      storage.beginEditing()
+      storage.addAttributes([.font: TextFormatting().font, .foregroundColor: UIColor.label],
+        range: NSRange(location: 0, length: storage.length))
+      for mark in session.snapshot.marks ?? [] {
+        storage.addAttribute(.font, value: mark.formatting.font,
+          range: NSRange(location: mark.offset, length: mark.length))
+      }
+      storage.endEditing()
+      applyTypingAttributes(to: textView)
+    }
+
     private func top(of offset: Int, in textView: UITextView) -> CGFloat {
       guard let position = textView.position(from: textView.beginningOfDocument, offset: offset) else { return 0 }
       return textView.caretRect(for: position).minY
     }
+  }
+}
+
+private extension TextFormatting {
+  var font: UIFont {
+    let style: UIFont.TextStyle = switch heading {
+    case 1: .title1
+    case 2: .title2
+    case 3: .title3
+    case 4: .headline
+    case 5: .subheadline
+    default: .body
+    }
+    let base = UIFont.preferredFont(forTextStyle: style)
+    var traits = base.fontDescriptor.symbolicTraits
+    if bold || heading > 0 { traits.insert(.traitBold) }
+    if italic { traits.insert(.traitItalic) }
+    return UIFont(descriptor: base.fontDescriptor.withSymbolicTraits(traits) ?? base.fontDescriptor, size: 0)
   }
 }
 

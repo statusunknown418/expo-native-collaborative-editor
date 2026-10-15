@@ -4,9 +4,27 @@ import ExpoUI
 public class ExpoNativeCollaborativeEditorModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ExpoNativeCollaborativeEditor")
+    Constant("capabilities") { FeaturePlugins.capabilities }
 
     Class("DocumentSession", DocumentSessionHandle.self) {
       Property("state") { (handle: DocumentSessionHandle) in handle.state }
+
+      AsyncFunction("setPlugins") { (handle: DocumentSessionHandle, registrations: [[String: Any]]) throws in
+        let plugins = try validatedPlugins(registrations)
+        try MainActor.assumeIsolated { try handle.session.setPlugins(plugins) }
+      }.runOnQueue(.main)
+
+      AsyncFunction("toggleBold") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.toggleBold() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("toggleItalic") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.toggleItalic() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("setHeading") { (handle: DocumentSessionHandle, level: Int) throws in
+        try MainActor.assumeIsolated { try handle.session.setHeading(level) }
+      }.runOnQueue(.main)
 
       AsyncFunction("undo") { (handle: DocumentSessionHandle) throws in
         try MainActor.assumeIsolated { try handle.session.undo() }
@@ -21,10 +39,11 @@ public class ExpoNativeCollaborativeEditorModule: Module {
       }.runOnQueue(.main)
     }
 
-    AsyncFunction("openDocument") { (accountNamespace: String, documentID: String) throws -> DocumentSessionHandle in
-      try MainActor.assumeIsolated {
+    AsyncFunction("openDocument") { (accountNamespace: String, documentID: String, registrations: [[String: Any]]) throws -> DocumentSessionHandle in
+      let plugins = try validatedPlugins(registrations)
+      return try MainActor.assumeIsolated {
         let session = try documentSessionRegistry()
-          .session(accountNamespace: accountNamespace, documentID: documentID)
+          .session(accountNamespace: accountNamespace, documentID: documentID, plugins: plugins)
         return DocumentSessionHandle(session: session)
       }
     }.runOnQueue(.main)
@@ -47,4 +66,12 @@ public class ExpoNativeCollaborativeEditorModule: Module {
 
 private final class InvalidRemoteEditException: Exception, @unchecked Sendable {
   override var reason: String { "offset and deleteCount must not be negative" }
+}
+
+private func validatedPlugins(_ registrations: [[String: Any]]) throws -> FeaturePlugins {
+  do {
+    return try FeaturePlugins(registrations: registrations)
+  } catch let error as EditorConfigurationError {
+    throw Exception(name: "EditorConfigurationError", description: error.message, code: "ERR_EDITOR_CONFIGURATION")
+  }
 }

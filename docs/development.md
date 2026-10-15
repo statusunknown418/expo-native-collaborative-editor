@@ -54,7 +54,9 @@ The example opens the proof screen: a local-only document (`example-account` / `
 
 `example/ios` is generated and git-ignored. After changing `example/app.json`, `example/plugins/`, the podspec, or native dependencies, regenerate it from `example/` with `bunx expo prebuild --platform ios --clean`. Run at the repository root, the same command deletes the module's `ios/` sources.
 
-While editing the module's TypeScript, run `bun run build` at the root to rebuild `build/` on change; Metro resolves the module through its `main` entry.
+From the repository root, run `bun run dev` to watch/rebuild the module's TypeScript and build, install, and launch the example's Debug app with Metro. Bun runs both processes together; Ctrl+C stops them.
+
+Fast Refresh picks up changes to `example/App.tsx` and the module's `src/` (compiled into `build/`, its package entry). Swift changes cannot Fast Refresh: stop and rerun `bun run dev` to rebuild the native app. This uses the custom example app, not Expo Go, which does not contain this module.
 
 ## Native tests
 
@@ -78,6 +80,19 @@ bun run test:ios:unit -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/Edi
 
 Remote updates persist during marked-text composition, but their surface patches wait until composition ends; the local commit rebases through their deltas. Marked text is unsaved input and never an outbox operation. Simulator keyboard limits and the physical-device checklist for #18 are recorded in [`m1-evidence.md`](m1-evidence.md#composition-and-system-replacements-g6-6).
 
+
+`FormattingTests` covers plugin validation, option changes without content/history reset, mixed selection state, UTF-16 boundaries, incremental mark-only updates, metadata upgrade, concurrent mark/deletion manifest convergence, and concurrent text/formatting on three replicas with recorded seeds 1–20. `EditingSurfaceTests` also exercises native typing fonts, remote mark-only patches, and formatting during composition.
+
+To use one existing simulator without creating test clones, pass its UDID explicitly rather than using the package's name-based defaults:
+
+```sh
+xcodebuild test -workspace ios/exponativecollaborativeeditorexample.xcworkspace \
+  -scheme ExpoNativeCollaborativeEditor-Unit-Tests \
+  -destination 'platform=iOS Simulator,id=ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF' \
+  -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1
+```
+
+For the example UI suite, use scheme `exponativecollaborativeeditorexample` and add `-configuration Release`. Run both commands from `example/`.
 
 `example/plugins/withNativeTests.js` wires both into the generated project during prebuild: it adds the module pod with `:testspecs => ['Tests']` to the Podfile, and adds the `ExampleUITests` target (every `example/uitests/*.swift` file) to the app's Xcode project and scheme. After adding a Swift file to either directory, rerun `bunx expo prebuild --platform ios --clean`.
 
@@ -114,5 +129,33 @@ The engine-independent projection of a document that tests compare: `SemanticSna
 | Key    | Value                                                                   |
 | ------ | ----------------------------------------------------------------------- |
 | `text` | The document text: Unicode scalars exactly as stored, never normalized. |
+| `marks` | Optional, ordered nonoverlapping runs: `{ offset, length, bold?: true, italic?: true, heading?: 1..6 }`. Offsets and lengths count UTF-16 code units. Adjacent equal runs coalesce; plain runs are omitted. |
+| `features` | Optional, sorted semantic requirements, such as `formatting.bold@1`. Monotonic: removing marks or undoing their creation does not remove requirements. |
 
-Equality is exact: canonically equivalent text, such as `é` and `e` + U+0301, differs. Marks, list items, and record references extend the format as new keys; a key is omitted while its content is empty, so existing scenarios stay valid.
+Equality is exact: canonically equivalent text, such as `é` and `e` + U+0301, differs. Empty `marks` and `features` keys are omitted, keeping the existing text scenarios valid. The `marks` scenario covers overlapping bold/italic, headings, surrogate-pair insertion inside a marked run, mark removal, and deletion to an empty document with retained feature requirements.
+
+## Formatting feature plugin (provisional, #8)
+
+```ts
+import { formattingPlugin, nativeCapabilities, openDocument } from 'expo-native-collaborative-editor';
+
+const session = await openDocument({
+  accountNamespace: 'account',
+  documentId: 'document',
+  plugins: [formattingPlugin({ bold: true, italic: true, headingLevels: [1, 2, 3] })],
+});
+await session.toggleBold();
+await session.toggleItalic();
+await session.setHeading(1); // 0 restores ordinary paragraphs.
+await session.setPlugins([]); // Disables authoring; does not clear content, typing marks, or history.
+```
+
+`nativeCapabilities` describes the actual native build. Each `FeaturePlugin` carries a nonempty unique `id`, `capability`, `version`, and typed `options`. One registration per capability is allowed. `formattingPlugin` uses ID/capability `formatting`, version 1; defaults are bold/italic enabled and heading levels 1–6. Heading levels normalize to sorted unique integers. The native boundary revalidates and normalizes every registration before opening or changing a session. Missing capabilities, incompatible versions, duplicate IDs/capabilities, and malformed/unknown options reject with `error.code === 'ERR_EDITOR_CONFIGURATION'`; failed configuration leaves the live session unchanged.
+
+Opening a document without `plugins` enables no authoring plugins. Reopening a live session with explicit configuration updates that shared session; views and undo history stay attached. Runtime changes affect future commands, never remove stored marks or change how supported content renders. Existing formatting can still be inherited while typing when its authoring controls are disabled.
+
+Collapsed-selection bold/italic commands change native typing attributes without writing content. Inserting text commits those semantic attributes in the same core transaction as the insertion. Selection commands change only the corresponding retained range. Heading commands expand to whole touched paragraphs; empty paragraphs use typing attributes until text exists. Heading changes preserve separately chosen inline typing marks. The provisional linear representation uses `YText` attributes `bold`, `italic`, and `heading` across paragraph characters and separators, including an unterminated final paragraph; it adds no hidden characters. Fonts and Dynamic Type sizes remain presentation, not document data. Representation is not frozen before #18.
+
+`session.state.selectedFormatting` and `stateChange` expose `{ bold, italic, heading }`. `null` means mixed; heading 0 means ordinary paragraphs. The example uses these values for selected button styles and accessibility values, and includes a runtime enable/disable control. Native typing, rendering, commands, and persistence run without per-keystroke JavaScript.
+
+Semantic requirements live in the CRDT root map `features` (`formatting.bold@1`, `formatting.italic@1`, `formatting.heading@1`, value 1), written with the first use in the same transaction and persisted/synchronized through the ordinary outbox. They are not part of the body-only undo scope. The unused SQLite seed column `feature_manifest` is removed on upgrade only when every legacy value is an empty array; nonempty legacy requirements fail visibly rather than being discarded. Application ID, lifecycle generation, and the original provisional schema identifier stay in SQLite metadata.

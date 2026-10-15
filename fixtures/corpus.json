@@ -38,5 +38,74 @@
     { "text": "Remove and 日本語 entirely" },
     { "text": "Remove entirely" },
     { "text": "" }
+  ],
+  "marks": [
+    { "text": "Bold italic\nHeading" },
+    {
+      "text": "Bold italic\nHeading",
+      "marks": [{ "offset": 0, "length": 4, "bold": true }],
+      "features": ["formatting.bold@1"]
+    },
+    {
+      "text": "Bold italic\nHeading",
+      "marks": [
+        { "offset": 0, "length": 4, "bold": true },
+        { "offset": 5, "length": 6, "italic": true }
+      ],
+      "features": ["formatting.bold@1", "formatting.italic@1"]
+    },
+    {
+      "text": "Bold italic\nHeading",
+      "marks": [
+        { "offset": 0, "length": 4, "bold": true },
+        { "offset": 5, "length": 6, "italic": true },
+        { "offset": 12, "length": 7, "heading": 1 }
+      ],
+      "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
+    },
+    {
+      "text": "Bold italic\nHeading",
+      "marks": [
+        { "offset": 0, "length": 4, "bold": true, "italic": true },
+        { "offset": 5, "length": 6, "italic": true },
+        { "offset": 12, "length": 7, "heading": 1 }
+      ],
+      "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
+    },
+    {
+      "text": "Bo👍ld italic\nHeading",
+      "marks": [
+        { "offset": 0, "length": 6, "bold": true, "italic": true },
+        { "offset": 7, "length": 6, "italic": true },
+        { "offset": 14, "length": 7, "heading": 1 }
+      ],
+      "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
+    },
+    {
+      "text": "Bo👍ld italic\nHeading",
+      "marks": [
+        { "offset": 0, "length": 6, "italic": true },
+        { "offset": 7, "length": 6, "italic": true },
+        { "offset": 14, "length": 7, "heading": 1 }
+      ],
+      "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
+    },
+    {
+      "text": "Bo👍ld italic\nHeading",
+      "marks": [
+        { "offset": 7, "length": 6, "italic": true },
+        { "offset": 14, "length": 7, "heading": 1 }
+      ],
+      "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
+    },
+    {
+      "text": "Bo👍ld italic\nHeading",
+      "marks": [{ "offset": 7, "length": 6, "italic": true }],
+      "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
+    },
+    {
+      "text": "",
+      "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
+    }
   ]
 }

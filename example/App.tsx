@@ -1,9 +1,10 @@
 import { Button, HStack, Host, Spacer, Text, VStack } from '@expo/ui/swift-ui';
-import { disabled, padding } from '@expo/ui/swift-ui/modifiers';
+import { accessibilityValue, buttonStyle, disabled, padding } from '@expo/ui/swift-ui/modifiers';
 import { useEvent } from 'expo';
 import {
   connectScriptedReplica,
   EditingSurface,
+  formattingPlugin,
   openDocument,
   type DocumentSession,
   type ScriptedReplica,
@@ -24,7 +25,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    openDocument({ accountNamespace: 'example-account', documentId })
+    openDocument({
+      accountNamespace: 'example-account',
+      documentId,
+      plugins: [formattingPlugin({ headingLevels: [1, 2, 3] })],
+    })
       .then(setSession)
       .catch((error: unknown) => setError(String(error)));
   }, []);
@@ -37,15 +42,13 @@ export default function App() {
 }
 
 function ProofScreen({ session }: { session: DocumentSession }) {
-  const { savedOnThisPhone, pendingSynchronization, canUndo, canRedo } = useEvent(
-    session,
-    'stateChange',
-    session.state
-  );
+  const { savedOnThisPhone, pendingSynchronization, canUndo, canRedo, selectedFormatting } =
+    useEvent(session, 'stateChange', session.state);
   const [showsEditor, setShowsEditor] = useState(true);
   const [replica, setReplica] = useState<ScriptedReplica | null>(null);
   const [nextRemoteEdit, setNextRemoteEdit] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [formattingEnabled, setFormattingEnabled] = useState(true);
 
   async function runCommand(command: () => Promise<void>) {
     setError(null);
@@ -96,6 +99,62 @@ function ProofScreen({ session }: { session: DocumentSession }) {
           label="Redo"
           modifiers={[disabled(!canRedo)]}
           onPress={() => void runCommand(() => session.redo())}
+        />
+        <Spacer />
+      </HStack>
+      <HStack modifiers={[padding({ horizontal: 16 })]}>
+        <Button
+          label="Bold"
+          modifiers={[
+            disabled(!formattingEnabled),
+            buttonStyle(selectedFormatting.bold === true ? 'borderedProminent' : 'bordered'),
+            accessibilityValue(
+              selectedFormatting.bold === null ? 'Mixed' : selectedFormatting.bold ? 'On' : 'Off'
+            ),
+          ]}
+          onPress={() => void runCommand(() => session.toggleBold())}
+        />
+        <Button
+          label="Italic"
+          modifiers={[
+            disabled(!formattingEnabled),
+            buttonStyle(selectedFormatting.italic === true ? 'borderedProminent' : 'bordered'),
+            accessibilityValue(
+              selectedFormatting.italic === null
+                ? 'Mixed'
+                : selectedFormatting.italic
+                  ? 'On'
+                  : 'Off'
+            ),
+          ]}
+          onPress={() => void runCommand(() => session.toggleItalic())}
+        />
+        <Button
+          label="Heading"
+          modifiers={[
+            disabled(!formattingEnabled),
+            buttonStyle(selectedFormatting.heading ? 'borderedProminent' : 'bordered'),
+            accessibilityValue(
+              selectedFormatting.heading === null ? 'Mixed' : `Level ${selectedFormatting.heading}`
+            ),
+          ]}
+          onPress={() =>
+            void runCommand(() => session.setHeading(selectedFormatting.heading ? 0 : 1))
+          }
+        />
+        <Spacer />
+      </HStack>
+      <HStack modifiers={[padding({ horizontal: 16 })]}>
+        <Button
+          label={formattingEnabled ? 'Disable formatting' : 'Enable formatting'}
+          onPress={() =>
+            void runCommand(async () => {
+              await session.setPlugins(
+                formattingEnabled ? [] : [formattingPlugin({ headingLevels: [1, 2, 3] })]
+              );
+              setFormattingEnabled(!formattingEnabled);
+            })
+          }
         />
         <Spacer />
       </HStack>
