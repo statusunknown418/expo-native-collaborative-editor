@@ -18,31 +18,8 @@ extension SemanticSnapshot: Equatable {
 }
 
 extension SemanticSnapshot {
-  init(body: YText, in doc: YDoc) throws {
-    let manifest = try doc.map(named: "features")
-    (text, marks, features, listItems) = try doc.read { transaction in
-      var text = ""
-      var marks: [SemanticMark] = []
-      var offset = 0
-      var textChunks: [(String, YAttributes)] = []
-      for chunk in try transaction.chunks(from: body) {
-        guard case .string(let value) = chunk.insert else { continue }
-        let formatting = TextFormatting(attributes: chunk.attributes)
-        textChunks.append((value, chunk.attributes))
-        text.append(value)
-        if formatting != TextFormatting() {
-          if let last = marks.last, last.offset + last.length == offset, last.formatting == formatting {
-            marks[marks.count - 1].length += value.utf16.count
-          } else {
-            marks.append(SemanticMark(offset: offset, length: value.utf16.count, formatting: formatting))
-          }
-        }
-        offset += value.utf16.count
-      }
-      let features = try transaction.entriesJSON(from: manifest).keys.sorted()
-      let items = projectedListItems(chunks: textChunks)
-      return (text, marks.isEmpty ? nil : marks, features.isEmpty ? nil : features, items.isEmpty ? nil : items)
-    }
+  init(document doc: YDoc) throws {
+    self = try BlockProjection(document: doc).snapshot
   }
 
   func formatting(at offset: Int) -> TextFormatting {

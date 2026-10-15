@@ -7,11 +7,19 @@ private let logger = Logger(subsystem: "expo.modules.nativecollaborativeeditor",
 /// the session through a delivery harness that a timer drives in real time. It makes each edit it
 /// is given once every earlier operation has been delivered, so it edits the text the person sees.
 final class ScriptedReplica: SharedObject, @unchecked Sendable {
+  /// The scripted concurrent nested-list scenario's progress.
+  enum ScenarioPhase: String {
+    case idle, seeding, holding, delivering, converged
+  }
+
   private let session: DocumentSession
   private let replica: DocumentSession
   private let harness: DeliveryHarness
   private var edits: [(range: Range<Int>, text: String)] = []
   private var timer: Timer?
+  private var phase = ScenarioPhase.idle {
+    didSet { emit(event: "scenarioChange", payload: ["phase": phase.rawValue]) }
+  }
 
   @MainActor
   init(connectingTo session: DocumentSession) throws {
@@ -40,9 +48,45 @@ final class ScriptedReplica: SharedObject, @unchecked Sendable {
     edits.append((range, text))
   }
 
+  /// Writes `Parent` (checklist) > `Child` (unordered) > `Grandchild` (ordered) and delivers it. Once
+  /// the person sees it, removes only `Child` and checks `Parent`, then holds delivery until
+  /// `resumeDelivery()`, so edits the person makes meanwhile are concurrent with the removal.
+  @MainActor
+  func startNestedListScenario() throws {
+    try replica.setPlugins(session.plugins)
+    try replica.replaceText(with: "Parent\nChild\nGrandchild")
+    for (depth, (kind, id)) in [(ListKind.checklist, "parent"), (.unordered, "child"), (.ordered, "grandchild")].enumerated() {
+      let offset = replica.projection.paragraphs[depth].offset
+      replica.selection = offset..<offset
+      try replica.setListKind(kind, itemID: id)
+      for _ in 0..<depth { try replica.indentListItem() }
+    }
+    phase = .seeding
+  }
+
+  @MainActor
+  func resumeDelivery() {
+    phase = .delivering
+  }
+
   @MainActor
   private func tick() {
     do {
+      let delivered = harness.isIdle && !session.hasUncommittedOperations && replica.isSavedOnThisPhone
+        && replica.snapshot == session.snapshot
+      switch phase {
+      case .seeding where delivered:
+        try replica.removeListItem("child")
+        try replica.toggleChecklistItem("parent")
+        phase = .holding
+        return
+      case .holding:
+        return
+      case .delivering where delivered:
+        phase = .converged
+      default:
+        break
+      }
       try harness.tick()
       guard !edits.isEmpty, harness.isIdle, !session.hasUncommittedOperations, replica.isSavedOnThisPhone else { return }
       let edit = edits.removeFirst()

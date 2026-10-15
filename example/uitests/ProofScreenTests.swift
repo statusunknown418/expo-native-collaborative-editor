@@ -19,7 +19,8 @@ final class ProofScreenTests: XCTestCase {
     app.buttons["Checklist"].tap()
     app.buttons["Indent"].tap()
     editor.typeText("Task")
-    let text = "Parent\nGroup\nStep\nTask\n"
+    // Converting a paragraph adds no text: the last item ends the document.
+    let text = "Parent\nGroup\nStep\nTask"
     waitForValue(text, in: editor)
     let parent = app.buttons["Parent"]
     let task = app.buttons["Task"]

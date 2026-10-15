@@ -91,6 +91,14 @@ public class ExpoNativeCollaborativeEditorModule: Module {
         guard offset >= 0, deleteCount >= 0 else { throw InvalidRemoteEditException() }
         MainActor.assumeIsolated { replica.edit(offset..<(offset + deleteCount), with: text) }
       }.runOnQueue(.main)
+
+      AsyncFunction("startNestedListScenario") { (replica: ScriptedReplica) throws in
+        try MainActor.assumeIsolated { try replica.startNestedListScenario() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("resumeDelivery") { (replica: ScriptedReplica) in
+        MainActor.assumeIsolated { replica.resumeDelivery() }
+      }.runOnQueue(.main)
     }
 
     AsyncFunction("connectScriptedReplica") { (handle: DocumentSessionHandle) throws -> ScriptedReplica in

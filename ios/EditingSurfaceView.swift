@@ -326,8 +326,9 @@ struct CollaborativeTextView: UIViewRepresentable {
         paragraph.firstLineHeadIndent = 44 + CGFloat(item.depth) * 28
         paragraph.headIndent = paragraph.firstLineHeadIndent
         paragraph.minimumLineHeight = 44
+        // The joining LF, which the last paragraph lacks.
         storage.addAttribute(.paragraphStyle, value: paragraph,
-          range: NSRange(location: item.offset, length: item.length + 1))
+          range: NSRange(location: item.offset, length: min(item.length + 1, storage.length - item.offset)))
       }
       storage.endEditing()
       applyTypingAttributes(to: textView)

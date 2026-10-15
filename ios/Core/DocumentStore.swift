@@ -29,9 +29,9 @@ struct DocumentStoreError: Error, CustomStringConvertible {
 /// SQLite store (the system `libsqlite3`) for document metadata, engine updates, the outbox, and
 /// delivery positions. Every statement runs on `queue`, the serial storage executor.
 final class DocumentStore: @unchecked Sendable {
-  /// Yrs v1 updates to linear rich text `body` and its semantic `features` map. The original schema
-  /// identifier remains while the M1 document representation is provisional.
-  static let plainTextSchemaID = "yrs-update-v1/plain-text-0"
+  /// Yrs v1 updates to the block model (ADR 0008): `body`, `blocks`, `order`, and the semantic
+  /// `features` map. Documents created before it keep `yrs-update-v1/plain-text-0`.
+  static let schemaID = "yrs-update-v1/blocks-1"
 
   private let db: OpaquePointer
   private let queue: DispatchQueue
@@ -97,7 +97,7 @@ final class DocumentStore: @unchecked Sendable {
 
       let created = DocumentMetadata(
         key: DocumentKey(accountNamespace: accountNamespace, documentID: documentID, lifecycleGeneration: 1),
-        schemaID: Self.plainTextSchemaID)
+        schemaID: Self.schemaID)
       try run(
         """
         INSERT INTO documents

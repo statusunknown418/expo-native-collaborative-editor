@@ -33,21 +33,24 @@ final class FixtureCorpusTests: XCTestCase {
       return XCTFail("\(fixture): \(updates.count) updates recorded for \(steps.count) steps")
     }
     let doc = YDoc()
-    let body = try doc.text(named: "body")
     for (step, (update, expected)) in zip(updates, steps).enumerated() {
       // The second application replays the update, which must change nothing.
       for _ in 1...2 {
         try doc.apply(.v1(update))
-        XCTAssertEqual(try SemanticSnapshot(body: body, in: doc), expected, "\(fixture) step \(step)")
+        XCTAssertEqual(try SemanticSnapshot(document: doc), expected, "\(fixture) step \(step)")
       }
     }
     for update in updates { try doc.apply(.v1(update)) }
-    XCTAssertEqual(try SemanticSnapshot(body: body, in: doc), steps.last, "\(fixture) after replaying every update")
+    XCTAssertEqual(try SemanticSnapshot(document: doc), steps.last, "\(fixture) after replaying every update")
   }
 
   /// Takes a document session through each missing scenario and records the updates it commits.
+  /// Sessions never write malformed structure, so that scenario records a raw Yrs document.
   private func recordMissingNativeFixtures(_ corpus: [String: [SemanticSnapshot]]) throws {
     var recorded = try recordedUpdates("swift")
+    if corpus["malformed-blocks"] != nil, recorded["malformed-blocks"] == nil {
+      recorded["malformed-blocks"] = [try malformedBlocks().document.encodeStateAsUpdateV1().data]
+    }
     for (name, steps) in corpus where recorded[name] == nil {
       let store = try DocumentStore(url: temporaryStoreURL())
       let session = try DocumentSessionRegistry(store: store).session(accountNamespace: "fixtures", documentID: name)

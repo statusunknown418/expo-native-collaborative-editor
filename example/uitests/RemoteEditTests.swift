@@ -57,6 +57,30 @@ final class RemoteEditTests: XCTestCase {
     XCTAssertEqual(editor.screenshot().pngRepresentation, scrolled, "an edit below the visible area moved it")
   }
 
+  /// G4 on the editing surface: the replica removes only `Child` while the person adds an item beneath
+  /// it, so the new item and `Grandchild` are both promoted to `Parent` on both replicas.
+  func testScriptedNestedListScenarioPromotesAChildTypedUnderAConcurrentlyRemovedParent() {
+    let app = XCUIApplication()
+    app.launchArguments = ["-documentId", "ui-test-\(UUID().uuidString)", "-nestedListScenario", "1"]
+    app.launch()
+    let editor = app.textViews["editing-surface"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 30))
+    app.buttons["Nested-list scenario"].tap()
+    XCTAssertTrue(app.buttons["Deliver remote edits"].waitForExistence(timeout: 10), "the replica never held its edits")
+    XCTAssertEqual(editor.value as? String, "Parent\nChild\nGrandchild")
+    XCTAssertEqual(app.buttons["checklist-parent"].value as? String, "Unchecked", "the remote check is held")
+
+    editor.tap()
+    editor.typeKey(.downArrow, modifierFlags: .command)  // The end of the document, after Grandchild.
+    editor.typeText("\nDeep")
+    XCTAssertEqual(editor.value as? String, "Parent\nChild\nGrandchild\nDeep")
+    app.buttons["Deliver remote edits"].tap()
+    XCTAssertTrue(app.staticTexts["Nested lists converged"].waitForExistence(timeout: 10), "the replicas never converged")
+    XCTAssertEqual(editor.value as? String, "Parent\nGrandchild\nDeep")
+    XCTAssertEqual(app.buttons["checklist-parent"].value as? String, "Checked")
+    XCTAssertTrue(app.staticTexts["Saved on this phone"].exists)
+  }
+
   /// Launches the example on a fresh document with a remote replica that makes `remoteEdits`, one per
   /// tap on "Remote edit". Offsets and counts are UTF-16 code units in the replica's text.
   private func launch(remoteEdits: [(offset: Int, deleteCount: Int, text: String)]) -> XCUIApplication {

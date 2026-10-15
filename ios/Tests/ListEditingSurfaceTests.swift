@@ -272,6 +272,24 @@ final class ListEditingSurfaceTests: XCTestCase {
     }
   }
 
+  func testAFinalItemWithoutATrailingLFRendersWhenItArrivesRemotely() throws {
+    let local = try makeSession()
+    let remote = try makeSession()
+    let harness = DeliveryHarness(seed: 3, faults: .none)
+    try harness.connect(local)
+    try harness.connect(remote)
+    let surface = ListSurface(session: local)
+    try remote.replaceText(with: "Plan\nTask")
+    remote.selection = 5..<5
+    try remote.setListKind(.checklist, itemID: "task")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(surface.textView.text, "Plan\nTask")
+    let style = surface.textView.textStorage.attribute(.paragraphStyle, at: 8, effectiveRange: nil) as? NSParagraphStyle
+    XCTAssertEqual(style?.firstLineHeadIndent, 44)
+    XCTAssertEqual(try surface.checkbox("task").accessibilityValue, "Unchecked")
+  }
+
   private func makeSession() throws -> DocumentSession {
     let session = try replica()
     try session.setPlugins(FeaturePlugins(registrations: [

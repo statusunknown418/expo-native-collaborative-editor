@@ -30,7 +30,9 @@ final class DocumentSession: ObservableObject {
   let metadata: DocumentMetadata
   /// Plain-text projection of the engine state.
   @Published private(set) var text: String
-  private(set) var snapshot: SemanticSnapshot
+  /// Display paragraphs of the block model, and the semantic snapshot they project to.
+  private(set) var projection: BlockProjection
+  var snapshot: SemanticSnapshot { projection.snapshot }
   var featureManifest: [String] { snapshot.features ?? [] }
   private(set) var plugins: FeaturePlugins
   @Published private(set) var selectedFormatting = SelectedFormatting()
@@ -72,6 +74,8 @@ final class DocumentSession: ObservableObject {
   private let store: DocumentStore
   private let doc: YDoc
   let body: YText
+  let blocks: YMap
+  let order: YArray
   private let manifest: YMap
   private let undoHistory: YUndoManager
   private let transactionUpdate = Capture<Data>()
@@ -95,18 +99,22 @@ final class DocumentSession: ObservableObject {
     doc = clientID.map { YDoc(clientID: $0) } ?? YDoc()
     let body = try doc.text(named: "body")
     self.body = body
+    let blocks = try doc.map(named: "blocks")
+    self.blocks = blocks
+    let order = try doc.array(named: "order")
+    self.order = order
     manifest = try doc.map(named: "features")
     let updates = try store.updates(for: metadata.key)
     try doc.write { transaction in
       for update in updates { try transaction.apply(.v1(update)) }
     }
-    snapshot = try SemanticSnapshot(body: body, in: doc)
-    text = snapshot.text
+    projection = try BlockProjection(document: doc)
+    text = projection.snapshot.text
     hasPendingSynchronization = !(try store.outbox(for: metadata.key).isEmpty)
     deliveredThrough = try store.deliveredThrough(metadata.key)
     // Replayed content is committed state, never part of this session's undo history.
     undoHistory = YUndoManager(document: doc)
-    try undoHistory.addScope(body)
+    for scope: YSharedType in [body, blocks, order] { try undoHistory.addScope(scope) }
     undoHistory.includeOrigin("local")
     // Registered after replay so they only see this session's transactions.
     observations = [
@@ -138,9 +146,14 @@ final class DocumentSession: ObservableObject {
     let range = edit.utf16Offset..<(edit.utf16Offset + edit.utf16Length)
     try validate(range)
     let formatting = range == selection ? typingFormatting : inheritedFormatting(at: range.lowerBound)
+    let expected = (text as NSString).replacingCharacters(in: NSRange(range), with: edit.replacement)
     try transact { transaction in
-      try replaceListAware(in: range, with: edit.replacement, formatting: formatting, transaction: transaction)
+      _ = try replaceBlocks(in: range, with: edit.replacement, formatting: formatting, transaction: transaction)
     }
+    // Lines pasted into a list item with children follow its subtree, unlike the surface's plain
+    // replacement; correct the surface.
+    // ponytail: the surface keeps the selection it computed for the plain replacement.
+    if let correction = TextEdit(from: expected, to: text) { surfaceChanges.send([correction]) }
   }
 
   /// Every plugin mutation uses this same core transaction, undo, and persistence path.
@@ -149,7 +162,7 @@ final class DocumentSession: ObservableObject {
     _ = transactionDelta.take()
     try doc.write(origin: "local") { try mutation($0) }
     undoHistory.stopCapturing()
-    snapshot = try SemanticSnapshot(body: body, in: doc)
+    projection = try project()
     text = snapshot.text
     persistLocalUpdate()
     updateHistoryAvailability()
@@ -180,8 +193,10 @@ final class DocumentSession: ObservableObject {
       return
     }
     try transact { transaction in
-      try transaction.format(body, at: UInt32(selection.lowerBound), length: UInt32(selection.count),
-        attributes: [key: enabled ? .bool(true) : .null])
+      for range in projection.bodyRanges(for: selection) {
+        try transaction.format(body, at: UInt32(range.lowerBound), length: UInt32(range.count),
+          attributes: [key: enabled ? .bool(true) : .null])
+      }
       if enabled { try recordFeatures(["formatting.\(key)@1"], in: transaction) }
     }
     updateSelectedFormatting(resetTyping: true)
@@ -201,8 +216,10 @@ final class DocumentSession: ObservableObject {
     let range = string.paragraphRange(for: NSRange(selection))
     if range.length > 0 {
       try transact { transaction in
-        try transaction.format(body, at: UInt32(range.location), length: UInt32(range.length),
-          attributes: ["heading": level == 0 ? .null : .int(Int64(level))])
+        for range in projection.bodyRanges(for: Range(range)!) {
+          try transaction.format(body, at: UInt32(range.lowerBound), length: UInt32(range.count),
+            attributes: ["heading": level == 0 ? .null : .int(Int64(level))])
+        }
         if level > 0 { try recordFeatures(["formatting.heading@1"], in: transaction) }
       }
       if !selection.isEmpty { typingFormatting = snapshot.formatting(at: selection.lowerBound) }
@@ -243,29 +260,41 @@ final class DocumentSession: ObservableObject {
     typingFormattingChanges.send()
   }
 
-  /// Structural commands share the native commit path, then publish the actual engine delta once.
-  func performListEdit(_ mutation: (YWriteTransaction) throws -> Int?) throws {
+  /// Structural commands share the native commit path, then publish what they changed once. The
+  /// mutation may name where the caret goes; otherwise the selection stays with the blocks it is in.
+  func performListEdit(_ mutation: (YWriteTransaction) throws -> BlockPosition?) throws {
     try requireOpen()
     guard !hasMarkedText else { throw DocumentSessionError.unsavedInput }
     try validate(selection)
-    let previousSelection = selection
-    var caret: Int?
+    let previous = projection
+    var caret: BlockPosition?
     try transact { caret = try mutation($0) }
-    let edits = Self.edits(from: transactionDelta.take() ?? [])
-    if let caret {
-      let offset = min(max(0, caret), text.utf16.count)
+    let edits = previous.surfaceEdits(to: projection, delta: transactionDelta.take() ?? []).edits
+    if let caret, let offset = projection.offset(of: caret) {
       selection = offset..<offset
     } else {
-      var lower = previousSelection.lowerBound
-      var upper = previousSelection.upperBound
-      for edit in edits {
-        lower = edit.transform(lower, sticksToPreceding: previousSelection.isEmpty)
-        upper = edit.transform(upper, sticksToPreceding: true)
-      }
-      selection = lower..<max(lower, upper)
+      moveSelection(from: previous, through: edits, byBlocks: true)
     }
     updateSelectedFormatting(resetTyping: true)
     surfaceChanges.send(edits)
+  }
+
+  /// A caret sticks to the character before it. A range keeps its own characters: its start sticks to
+  /// the character after it, its end to the character before it. After a structural change, ends
+  /// whose blocks are still visible stay in them instead.
+  private func moveSelection(from previous: BlockProjection, through edits: [TextEdit], byBlocks: Bool) {
+    if byBlocks, let lower = previous.position(of: selection.lowerBound).flatMap(projection.offset(of:)),
+      let upper = previous.position(of: selection.upperBound).flatMap(projection.offset(of:)) {
+      selection = lower..<max(lower, upper)
+      return
+    }
+    var lower = selection.lowerBound
+    var upper = selection.upperBound
+    for edit in edits {
+      lower = edit.transform(lower, sticksToPreceding: selection.isEmpty)
+      upper = edit.transform(upper, sticksToPreceding: true)
+    }
+    selection = lower..<max(lower, upper)
   }
 
   func undo() throws {
@@ -281,6 +310,7 @@ final class DocumentSession: ObservableObject {
     guard !hasMarkedText else { throw DocumentSessionError.unsavedInput }
     guard redo ? canRedo : canUndo else { return }
     _ = transactionDelta.take()
+    let previous = projection
     if redo {
       _ = try undoHistory.redo()
     } else {
@@ -288,7 +318,7 @@ final class DocumentSession: ObservableObject {
     }
     persistLocalUpdate()
     updateHistoryAvailability()
-    try publishSurfaceChanges(moveCaretToEditEnd: redo)
+    try publishSurfaceChanges(from: previous, moveCaretToEditEnd: redo)
   }
 
   private func updateHistoryAvailability() {
@@ -365,56 +395,33 @@ final class DocumentSession: ObservableObject {
 
   private func applyRemote(_ update: Data) throws {
     _ = transactionDelta.take()
+    let previous = projection
     try doc.write(origin: "remote") { try $0.apply(.v1(update)) }
     // A remote update, not a local one to commit. Replays need no projection or surface work.
     guard transactionUpdate.take() != nil else { return }
     updateHistoryAvailability()
-    try publishSurfaceChanges()
+    try publishSurfaceChanges(from: previous)
   }
 
-  private func publishSurfaceChanges(moveCaretToEditEnd: Bool = false) throws {
+  private func publishSurfaceChanges(from previous: BlockProjection, moveCaretToEditEnd: Bool = false) throws {
     let delta = transactionDelta.take() ?? []
+    projection = try project()
     // Concurrent deletion can make a mark update change only the semantic feature manifest.
-    snapshot = try SemanticSnapshot(body: body, in: doc)
-    guard !delta.isEmpty else { return }
-    let edits = Self.edits(from: delta)
+    guard snapshot != previous.snapshot else { return }
+    let (edits, exact) = previous.surfaceEdits(to: projection, delta: delta)
     text = snapshot.text
     if moveCaretToEditEnd, let last = edits.last {
       let caret = last.utf16Offset + last.replacement.utf16.count
       selection = caret..<caret
     } else {
-      // A caret sticks to the character before it. A range keeps its own characters: its start sticks
-      // to the character after it, its end to the character before it.
-      var lower = selection.lowerBound
-      var upper = selection.upperBound
-      for edit in edits {
-        lower = edit.transform(lower, sticksToPreceding: selection.isEmpty)
-        upper = edit.transform(upper, sticksToPreceding: true)
-      }
-      selection = lower..<max(lower, upper)
+      moveSelection(from: previous, through: edits, byBlocks: !exact)
     }
     updateSelectedFormatting(resetTyping: true)
     surfaceChanges.send(edits)
   }
 
-  /// The edits a text delta makes, in order, each offset into the text the edits before it produced.
-  private static func edits(from delta: [YTextDeltaOperation]) -> [TextEdit] {
-    var offset = 0
-    var edits: [TextEdit] = []
-    for operation in delta {
-      switch operation {
-      case .retain(let length, _):
-        offset += Int(length)
-      case .delete(let length):
-        edits.append(TextEdit(utf16Offset: offset, utf16Length: Int(length), replacement: ""))
-      case .insert(let value, _):
-        // An embed occupies one offset; plain-text documents hold none.
-        let inserted = if case .string(let string) = value { string } else { "\u{FFFC}" }
-        edits.append(TextEdit(utf16Offset: offset, utf16Length: 0, replacement: inserted))
-        offset += inserted.utf16.count
-      }
-    }
-    return edits
+  private func project() throws -> BlockProjection {
+    try doc.read { try BlockProjection($0, body: body, blocks: blocks, order: order, features: manifest) }
   }
 }
 

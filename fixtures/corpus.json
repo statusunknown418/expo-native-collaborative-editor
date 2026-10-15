@@ -360,5 +360,17 @@
       ],
       "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
     }
+  ],
+  "malformed-blocks": [
+    {
+      "text": "Head\nB\nC\nA\nA2\nE\nF\nG\nD",
+      "listItems": [
+        { "id": "b", "kind": "checklist", "checked": false, "offset": 5, "length": 1, "depth": 0 },
+        { "id": "c", "kind": "unordered", "parent": "b", "offset": 7, "length": 1, "depth": 1 },
+        { "id": "a", "kind": "ordered", "offset": 9, "length": 4, "depth": 0 },
+        { "id": "dup", "kind": "unordered", "offset": 14, "length": 1, "depth": 0 },
+        { "id": "d", "kind": "checklist", "checked": false, "offset": 20, "length": 1, "depth": 0 }
+      ]
+    }
   ]
 }

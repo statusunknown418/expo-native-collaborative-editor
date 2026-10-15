@@ -20,6 +20,8 @@ const documentId: string = Settings.get('documentId') ?? 'proof-document';
 const remoteEdits: { offset: number; deleteCount: number; text: string }[] = JSON.parse(
   decodeURIComponent(Settings.get('remoteEdits') ?? '[]')
 );
+// `-nestedListScenario 1` connects the replica for the scripted concurrent nested-list scenario.
+const nestedListScenario = Boolean(Settings.get('nestedListScenario'));
 
 function formattingValue(value: boolean | null) {
   if (value === null) {
@@ -69,7 +71,7 @@ function ProofScreen({ session }: { session: DocumentSession }) {
   }, []);
 
   useEffect(() => {
-    if (remoteEdits.length > 0) {
+    if (remoteEdits.length > 0 || nestedListScenario) {
       connectScriptedReplica(session)
         .then(setReplica)
         .catch((failure: unknown) => setError(String(failure)));
@@ -211,7 +213,40 @@ function ProofScreen({ session }: { session: DocumentSession }) {
           <Spacer />
         </HStack>
       ) : null}
+      {replica && nestedListScenario ? (
+        <NestedListScenario replica={replica} runCommand={runCommand} />
+      ) : null}
       {showsEditor ? <EditingSurface session={session} testID="editing-surface" /> : <Spacer />}
     </VStack>
+  );
+}
+
+/**
+ * Starts the scripted concurrent nested-list scenario. While the replica holds its remote edits, edits
+ * on the surface are concurrent with them; "Deliver remote edits" lets both replicas converge.
+ */
+function NestedListScenario({
+  replica,
+  runCommand,
+}: {
+  replica: ScriptedReplica;
+  runCommand(command: () => Promise<void>): Promise<void>;
+}) {
+  const { phase } = useEvent(replica, 'scenarioChange', { phase: 'idle' as const });
+  const handleStart = useCallback(
+    () => runCommand(() => replica.startNestedListScenario()),
+    [replica, runCommand]
+  );
+  const handleDeliver = useCallback(
+    () => runCommand(() => replica.resumeDelivery()),
+    [replica, runCommand]
+  );
+  return (
+    <HStack modifiers={[padding({ horizontal: 16 })]}>
+      {phase === 'idle' ? <Button label="Nested-list scenario" onPress={handleStart} /> : null}
+      {phase === 'holding' ? <Button label="Deliver remote edits" onPress={handleDeliver} /> : null}
+      {phase === 'converged' ? <Text>Nested lists converged</Text> : null}
+      <Spacer />
+    </HStack>
   );
 }

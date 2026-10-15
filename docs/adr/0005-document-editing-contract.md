@@ -37,6 +37,6 @@ Recovery retries the retained pending work rather than repeating the original in
 
 ## Native proof
 
-M1 must exercise nested-list indentation and parent/child edits under concurrency, not only a single checklist item. The linear separator-based representation remains a candidate, not a selected schema; it must demonstrate the agreed hierarchy semantics before adoption, or be replaced by an explicit block model. Native proof must also cover permission changes during input/composition, rejected command calls, and host-visible errors without falsely acknowledging rejected content as saved.
+M1 must exercise nested-list indentation and parent/child edits under concurrency, not only a single checklist item. The linear separator-based representation failed that proof and was replaced by an explicit block model ([ADR 0008](0008-explicit-block-document-model.md)). Native proof must also cover permission changes during input/composition, rejected command calls, and host-visible errors without falsely acknowledging rejected content as saved.
 
 Clipboard proof must demonstrate independent pasted checklist items and destination-authorized references without leaking record IDs into external representations. Storage-failure proof must exercise retained input, rejected subsequent mutations, retry without duplication, and no false saved or uploaded state.

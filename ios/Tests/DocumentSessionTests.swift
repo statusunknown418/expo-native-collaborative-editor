@@ -26,7 +26,7 @@ final class DocumentSessionTests: XCTestCase {
     let url = temporaryStoreURL()
     let expected = DocumentMetadata(
       key: DocumentKey(accountNamespace: "account-a", documentID: "doc-1", lifecycleGeneration: 1),
-      schemaID: "yrs-update-v1/plain-text-0")
+      schemaID: "yrs-update-v1/blocks-1")
     do {
       let store = try DocumentStore(url: url)
       let created = try DocumentSessionRegistry(store: store)

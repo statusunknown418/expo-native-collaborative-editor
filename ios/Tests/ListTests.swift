@@ -304,32 +304,38 @@ final class ListTests: XCTestCase {
     XCTAssertEqual(session.snapshot.listItems?.map(\.parent), [nil, "parent", "stay", nil])
   }
 
-  func testDeletingSeparatorPromotesSurvivorsAndInsertedTextDoesNotAcquireIdentity() throws {
+  func testDeletingAnLFJoinsItemsAndPastedLinesSplitWithFreshIdentities() throws {
     let session = try listReplica([
       ("Root", .ordered, "root", 0), ("Child", .checklist, "child", 1),
       ("Grandchild", .unordered, "grandchild", 2),
     ])
+    var rendered = session.text
+    let subscription = session.surfaceChanges.sink { rendered = applying($0, to: rendered) ?? "invalid edits" }
+    defer { subscription.cancel() }
     try session.replaceText(in: 4..<5, with: "")
+    rendered = session.text
     XCTAssertEqual(session.text, "RootChild\nGrandchild\n")
-    XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["child", "grandchild"])
-    XCTAssertEqual(session.snapshot.listItems?.map(\.parent), [nil, "child"])
+    XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["root", "grandchild"], "the left item keeps its identity")
+    XCTAssertEqual(session.snapshot.listItems?.map(\.parent), [nil, "root"])
+    // A plain surface replacement would put "Child" above Grandchild; the new sibling follows Root's subtree.
+    rendered = "Rootnew\nChild\nGrandchild\n"
     try session.replaceText(in: 4..<4, with: "new\n")
-    XCTAssertEqual(session.text, "Rootnew\nChild\nGrandchild\n")
-    XCTAssertNil(session.snapshot.listItem(at: 0))
-    XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["child", "grandchild"])
-    XCTAssertEqual(session.snapshot.listItems?.map(\.parent), [nil, "child"])
-    try session.replaceText(in: 8..<8, with: "Pasted\n")
-    XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["child", "grandchild"])
-    XCTAssertNil(session.snapshot.listItem(at: 8))
+    XCTAssertEqual(session.text, "Rootnew\nGrandchild\nChild\n")
+    XCTAssertEqual(rendered, session.text, "the surface receives the correction")
+    let items = try XCTUnwrap(session.snapshot.listItems)
+    XCTAssertEqual(items.prefix(2).map(\.id), ["root", "grandchild"])
+    XCTAssertFalse(["root", "child", "grandchild"].contains(items[2].id), "pasted lines never take an existing identity")
+    XCTAssertEqual(items.map(\.parent), [nil, "root", nil])
+    XCTAssertEqual(items[2].kind, .ordered)
   }
 
-  func testConversionTouchesEverySelectedParagraphAndMaterializesOnlyRealFinalLF() throws {
+  func testConversionTouchesEverySelectedParagraphWithoutAddingText() throws {
     let session = try replica()
     try session.setPlugins(listsPlugins())
     try session.replaceText(with: "One\nTwo\nThree")
     session.selection = 0..<session.text.utf16.count
     try session.setListKind(.ordered)
-    XCTAssertEqual(session.text, "One\nTwo\nThree\n")
+    XCTAssertEqual(session.text, "One\nTwo\nThree")
     let ids = try XCTUnwrap(session.snapshot.listItems).map(\.id)
     XCTAssertEqual(Set(ids).count, 3)
     XCTAssertEqual(session.snapshot.listItems?.map(\.offset), [0, 4, 8])
@@ -341,11 +347,11 @@ final class ListTests: XCTestCase {
     XCTAssertEqual(session.snapshot.listItems?.first?.checked, false)
     XCTAssertNotNil(session.snapshot.listItem(at: 3), "a separator belongs to its preceding item")
     XCTAssertEqual(session.snapshot.listItem(at: 4)?.id, ids[1])
-    XCTAssertNil(session.snapshot.listItem(at: session.text.utf16.count))
+    XCTAssertEqual(session.snapshot.listItem(at: session.text.utf16.count)?.id, ids[2], "the last item ends the text")
     XCTAssertEqual(session.featureManifest, ["lists.checklist@1", "lists.ordered@1"])
   }
 
-  func testPersistedRepresentationAndConsumerJSONUseOnlyRealSeparatorsAndOptionalFields() throws {
+  func testStoredBlocksLabelOnlyLFsAndConsumerJSONOmitsAbsentFields() throws {
     let session = try listReplica([
       ("Task", .checklist, "task", 0), ("Step", .ordered, "step", 1),
       ("Bullet", .unordered, "bullet", 0),
@@ -356,21 +362,22 @@ final class ListTests: XCTestCase {
     try session.replaceText(in: 0..<0, with: "Prefix ")
     waitUntil { session.isSavedOnThisPhone }
     let document = YDoc()
-    let body = try document.text(named: "body")
     for operation in try session.pendingOperations() { try document.apply(.v1(operation.update)) }
-    let chunks = try document.read { try $0.chunks(from: body) }
-    var storedIDs: Set<String> = []
-    for chunk in chunks {
-      if case .string(let id) = chunk.attributes["listID"] {
-        guard case .string(let text) = chunk.insert else {
-          XCTFail("list semantics require an LF text separator")
-          continue
-        }
-        XCTAssertEqual(text, "\n")
-        XCTAssertTrue(storedIDs.insert(id).inserted, "an item ID must occur on exactly one separator")
-      }
+    let body = try document.text(named: "body")
+    let order = try document.array(named: "order")
+    let (chunks, keys) = try document.read {
+      (try $0.chunks(from: body), try $0.valuesJSON(from: order).compactMap { $0 as? String })
     }
-    XCTAssertEqual(storedIDs, Set(session.snapshot.listItems!.map(\.id)))
+    var labels: [String] = []
+    for chunk in chunks {
+      guard case .string(let key) = chunk.attributes["block"] else { continue }
+      XCTAssertEqual(chunk.insert, .string("\n"), "only an LF starts a block")
+      labels.append(key)
+    }
+    XCTAssertEqual(labels.count, 4)
+    XCTAssertEqual(Set(labels).count, labels.count, "each block key labels one LF")
+    XCTAssertEqual(keys.sorted(), labels.sorted(), "every labeled block has one sibling position")
+    XCTAssertEqual(try SemanticSnapshot(document: document), session.snapshot)
     let data = try JSONEncoder().encode(session.snapshot)
     let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let items = try XCTUnwrap(json["listItems"] as? [[String: Any]])
@@ -431,35 +438,29 @@ final class ListTests: XCTestCase {
     session.hasMarkedText = false
   }
 
-  func testProjectionClampsMalformedRemoteDepthsAndIgnoresDuplicateAndOrdinarySeparators() throws {
-    let remote = YDoc()
-    let body = try remote.text(named: "body")
-    try remote.write { transaction in
-      try transaction.insert("One\nTwo\nDuplicate\nPlain\nThree\nFour\n", into: body, at: 0)
-      let specifications: [(Int, String, YValue)] = [
-        (3, "one", .int(100)), (7, "two", .double(1e30)), (17, "one", .int(0)),
-        (29, "three", .int(7)), (34, "four", .double(1.5)),
-      ]
-      for (offset, id, depth) in specifications {
-        try transaction.format(body, at: UInt32(offset), length: 1, attributes: [
-          "listID": .string(id), "listKind": .string("checklist"), "listDepth": depth,
-          "listChecked": .string("not-a-boolean"),
-        ])
-      }
-      // Attributes on visible text alone are not a list item.
-      try transaction.format(body, at: 18, length: 5, attributes: [
-        "listID": .string("not-a-separator"), "listKind": .string("ordered"), "listDepth": .int(0),
-      ])
+  /// Conflicting or malformed structure projects deterministically and is never repaired on open.
+  func testMalformedBlocksProjectTheSameOnEveryReplicaWithoutWrites() throws {
+    let (remote, text, textState) = try malformedBlocks()
+    let expected = SemanticSnapshot(text: "Head\nB\nC\nA\nA2\nE\nF\nG\nD", listItems: [
+      SemanticListItem(id: "b", kind: .checklist, parent: nil, checked: false, offset: 5, length: 1, depth: 0),
+      SemanticListItem(id: "c", kind: .unordered, parent: "b", checked: nil, offset: 7, length: 1, depth: 1),
+      SemanticListItem(id: "a", kind: .ordered, parent: nil, checked: nil, offset: 9, length: 4, depth: 0),
+      SemanticListItem(id: "dup", kind: .unordered, parent: nil, checked: nil, offset: 14, length: 1, depth: 0),
+      SemanticListItem(id: "d", kind: .checklist, parent: nil, checked: false, offset: 20, length: 1, depth: 0),
+    ])
+    let url = temporaryStoreURL()
+    let whole = try replica(at: url)
+    try whole.receive(try remote.encodeStateAsUpdateV1().data, at: 1)
+    let split = try replica()
+    try split.receive(text.data, at: 1)
+    try split.receive(try remote.encodeStateAsUpdateV1(from: textState).data, at: 2)
+    XCTAssertEqual(whole.snapshot, expected)
+    XCTAssertEqual(split.snapshot, expected)
+    let reopened = try replica(at: url)
+    XCTAssertEqual(reopened.snapshot, expected)
+    for session in [whole, split, reopened] {
+      XCTAssertTrue(try session.pendingOperations().isEmpty, "projection must never repair the shared document")
     }
-    let update = try remote.encodeStateAsUpdateV1()
-    let session = try replica()
-    try session.receive(update.data, at: 1)
-    XCTAssertEqual(session.text, "One\nTwo\nDuplicate\nPlain\nThree\nFour\n")
-    XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["one", "two", "three"])
-    XCTAssertEqual(session.snapshot.listItems?.map(\.depth), [0, 1, 0])
-    XCTAssertEqual(session.snapshot.listItems?.map(\.parent), [nil, "one", nil])
-    XCTAssertEqual(session.snapshot.listItems?.map(\.checked), [false, false, false])
-    XCTAssertTrue(try session.pendingOperations().isEmpty, "projection must never repair the shared document")
   }
 
   func testStructuralCommandsPersistIncrementallyAndRestoreWithoutReplayingToggles() throws {
@@ -491,10 +492,11 @@ final class ListTests: XCTestCase {
   }
 }
 
+/// A replica whose paragraphs are list items given as (text, kind, ID, depth), in document order.
 @MainActor
-private func listReplica(_ specifications: [(String, ListKind, String, Int)],
-  at url: URL = temporaryStoreURL()) throws -> DocumentSession {
-  let session = try replica(at: url)
+func listReplica(_ specifications: [(String, ListKind, String, Int)],
+  at url: URL = temporaryStoreURL(), clientID: UInt64? = nil) throws -> DocumentSession {
+  let session = try replica(at: url, clientID: clientID)
   try session.setPlugins(FeaturePlugins(registrations: [listsRegistration(), formattingRegistration()]))
   try session.replaceText(with: specifications.map { $0.0 + "\n" }.joined())
   var offset = 0
@@ -508,12 +510,48 @@ private func listReplica(_ specifications: [(String, ListKind, String, Int)],
 }
 
 @MainActor
-private func item(_ id: String, in session: DocumentSession) throws -> SemanticListItem {
+func item(_ id: String, in session: DocumentSession) throws -> SemanticListItem {
   try XCTUnwrap(session.snapshot.listItems?.first(where: { $0.id == id }))
 }
 
 @MainActor
-private func select(_ id: String, in session: DocumentSession) throws {
+func select(_ id: String, in session: DocumentSession) throws {
   let offset = try item(id, in: session).offset
   session.selection = offset..<offset
+}
+
+/// Text first, then conflicting and malformed structure: a duplicate label, a label on text, a cycle,
+/// a parent that never existed, a block missing from `order` and an `order` key missing from the
+/// text, a reused identity, an unknown kind, and non-boolean checked values. Also the
+/// `malformed-blocks` fixture. Returns the document, its text-only update, and that update's state.
+func malformedBlocks() throws -> (document: YDoc, text: YUpdate, textState: YStateVector) {
+  let remote = YDoc()
+  let body = try remote.text(named: "body")
+  let blocks = try remote.map(named: "blocks")
+  let order = try remote.array(named: "order")
+  try remote.write { transaction in
+    try transaction.insert("Head\nA\nA2\nB\nC\nD\nE\nF\nG", into: body, at: 0)
+    for (offset, key) in [(4, "a"), (6, "a"), (9, "b"), (11, "c"), (13, "d"), (15, "e"), (17, "f"), (19, "g")] {
+      try transaction.format(body, at: UInt32(offset), length: 1, attributes: ["block": .string(key)])
+    }
+    try transaction.format(body, at: 0, length: 4, attributes: ["block": .string("x")])
+  }
+  let text = try remote.encodeStateAsUpdateV1()
+  let textState = try remote.stateVector()
+  try remote.write { transaction in
+    let fields: [(String, YValue)] = [
+      ("a/kind", .string("ordered")),
+      ("b/kind", .string("checklist")), ("b/parent", .string("c")), ("b/checked", .int(1)),
+      ("c/kind", .string("unordered")), ("c/parent", .string("b")),
+      ("d/kind", .string("checklist")), ("d/parent", .string("missing")), ("d/checked", .string("true")),
+      ("e/kind", .string("unordered")), ("e/id", .string("dup")),
+      ("f/kind", .string("ordered")), ("f/id", .string("dup")),
+      ("g/kind", .string("bogus")),
+    ]
+    for (key, value) in fields { try transaction.set(value, forKey: key, in: blocks) }
+    for (index, key) in ["c", "b", "a", "e", "f", "g", "ghost"].enumerated() {
+      try transaction.insert(.string(key), into: order, at: UInt32(index))
+    }
+  }
+  return (remote, text, textState)
 }
