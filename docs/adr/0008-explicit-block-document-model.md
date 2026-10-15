@@ -4,7 +4,7 @@ The linear representation (Candidate 1: list kind, absolute depth, checked state
 
 ## Representation
 
-Yrs v1 updates to four root types, schema identifier `yrs-update-v1/blocks-1` for documents created from now on:
+Yrs v1 updates to four root types, schema identifier `yrs-update-v1/blocks-1`:
 
 - `body` (`YText`): the head block's text, then for each other block an LF whose attribute `block` is that block's key, followed by the block's text. Marks (`bold`, `italic`, `heading`) stay text attributes. Inserted text carries `block: null`, so it never inherits a label. An LF without a valid, first-seen label is a line break inside its block.
 - `blocks` (`YMap`), flat keys `<key>/<field>`: `kind` (`ordered` | `unordered` | `checklist`; absent for an ordinary paragraph), `id` (list-item identity; defaults to the key), `parent` (a block key), `checked` (boolean), and `removed` (boolean; only the head block, which has no LF to delete, is removed this way). Flat keys give per-field last-writer-wins without nested maps whose concurrent creation would overwrite each other.
@@ -42,5 +42,5 @@ Candidate 1 failed because an absolute depth loses which item is the parent, and
 - Text inserted concurrently into a block that another replica removes, or joins by copying (only non-adjacent texts are copied), is kept but joins whichever block precedes the removed one in `body`.
 - Concurrent placements of one key may combine one replica's parent with another's sibling position, as in the indent/outdent row; the result is valid but neither replica's exact intent.
 - Removed blocks keep their fields and `order` entries, and a removed head block stays in `body` as a hidden empty paragraph; compaction is future work.
-- Documents created under `yrs-update-v1/plain-text-0` decode unchanged as text; list structure they stored under Candidate 1 is not migrated.
+- Backward compatibility is out of scope: stores written in an earlier representation are not migrated or supported.
 - Lines pasted into a list item that has children follow its subtree, so the session sends the surface a correcting edit.

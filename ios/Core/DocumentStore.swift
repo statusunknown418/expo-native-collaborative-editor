@@ -30,7 +30,7 @@ struct DocumentStoreError: Error, CustomStringConvertible {
 /// delivery positions. Every statement runs on `queue`, the serial storage executor.
 final class DocumentStore: @unchecked Sendable {
   /// Yrs v1 updates to the block model (ADR 0008): `body`, `blocks`, `order`, and the semantic
-  /// `features` map. Documents created before it keep `yrs-update-v1/plain-text-0`.
+  /// `features` map.
   static let schemaID = "yrs-update-v1/blocks-1"
 
   private let db: OpaquePointer
