@@ -2,8 +2,8 @@
 // - the module pod's `Tests` test spec (scheme `ExpoNativeCollaborativeEditor-Unit-Tests`);
 // - a UI-test target for the example app built from `uitests/*.swift`, run by the app scheme.
 const { withPodfile, withXcodeProject } = require('expo/config-plugins');
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const UI_TESTS = 'ExampleUITests';
 const UI_TESTS_DIR = path.join(__dirname, '..', 'uitests');

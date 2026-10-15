@@ -2,7 +2,7 @@
 // are golden: existing entries are never rewritten.
 import * as Y from 'yjs';
 
-import { semanticSnapshot, type SemanticSnapshot } from './semanticSnapshot';
+import { type SemanticSnapshot, semanticSnapshot } from './semanticSnapshot';
 
 /** Yjs updates that take an empty document through `steps`, one transaction per step. */
 const record = (steps: SemanticSnapshot[]): string[] => {

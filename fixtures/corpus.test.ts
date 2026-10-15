@@ -2,7 +2,7 @@
 import { expect, test } from 'bun:test';
 import * as Y from 'yjs';
 
-import { semanticSnapshot, type SemanticSnapshot } from './semanticSnapshot';
+import { type SemanticSnapshot, semanticSnapshot } from './semanticSnapshot';
 
 /** Scenario name → the semantic snapshot after each step. */
 const corpus: Record<string, SemanticSnapshot[]> = await Bun.file(

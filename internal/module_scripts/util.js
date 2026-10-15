@@ -1,4 +1,4 @@
-const { spawnSync } = require('child_process');
+const { spawnSync } = require('node:child_process');
 
 // On Windows, executables like `tsc` and `jest` are `.cmd` batch files and cannot be
 // spawned directly — they require shell: true to resolve. On Unix, shell: true is

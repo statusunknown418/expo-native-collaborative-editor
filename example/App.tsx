@@ -1,12 +1,12 @@
-import { Button, HStack, Host, Spacer, Text, VStack } from '@expo/ui/swift-ui';
+import { Button, Host, HStack, Spacer, Text, VStack } from '@expo/ui/swift-ui';
 import { accessibilityValue, buttonStyle, disabled, padding } from '@expo/ui/swift-ui/modifiers';
 import { useEvent } from 'expo';
 import {
   connectScriptedReplica,
+  type DocumentSession,
   EditingSurface,
   formattingPlugin,
   openDocument,
-  type DocumentSession,
   type ScriptedReplica,
 } from 'expo-native-collaborative-editor';
 import { useEffect, useState } from 'react';
