@@ -1,14 +1,14 @@
 import Combine
 import ExpoModulesCore
-import ExpoUI
 import SwiftUI
 import UIKit
 import os
 
 private let logger = Logger(subsystem: "expo.modules.nativecollaborativeeditor", category: "EditingSurface")
 
-final class EditingSurfaceViewProps: UIBaseViewProps {
+final class EditingSurfaceViewProps: ExpoSwiftUI.ViewProps {
   @Field var session: DocumentSessionHandle?
+  @Field var testID: String?
 }
 
 /// Holds no document state: remounting binds a new view to the same session.
@@ -17,7 +17,7 @@ struct EditingSurfaceView: ExpoSwiftUI.View {
 
   var body: some View {
     if let session = props.session?.session {
-      CollaborativeTextView(session: session)
+      CollaborativeTextView(session: session, testID: props.testID)
     }
   }
 }
@@ -26,21 +26,26 @@ struct EditingSurfaceView: ExpoSwiftUI.View {
 /// so it cannot keep the visible text in place while a remote change lands (docs/m1-evidence.md).
 struct CollaborativeTextView: UIViewRepresentable {
   let session: DocumentSession
+  var testID: String? = nil
 
-  func makeUIView(context: Context) -> UITextView {
-    let textView = InputTextView()
-    textView.sessionUndoManager = SessionUndoManager(session: session, textView: textView)
+  func makeUIView(context: Context) -> EditingTextContainer {
+    let container = EditingTextContainer()
+    let textView = container.textView
+    textView.accessibilityIdentifier = testID
+    (textView as? InputTextView)?.sessionUndoManager = SessionUndoManager(session: session, textView: textView)
     textView.font = .preferredFont(forTextStyle: .body)
     textView.adjustsFontForContentSizeCategory = true
     context.coordinator.bind(textView)
-    return textView
+    return container
   }
 
-  func updateUIView(_ textView: UITextView, context: Context) {}
+  func updateUIView(_ container: EditingTextContainer, context: Context) {
+    container.textView.accessibilityIdentifier = testID
+  }
 
-  static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
-    (textView as? InputTextView)?.windowChanged = nil
-    coordinator.unbind(textView)
+  static func dismantleUIView(_ container: EditingTextContainer, coordinator: Coordinator) {
+    (container.textView as? InputTextView)?.windowChanged = nil
+    coordinator.unbind(container.textView)
   }
 
   func makeCoordinator() -> Coordinator {
@@ -61,6 +66,7 @@ struct CollaborativeTextView: UIViewRepresentable {
     /// UITextView clears marked text on storage patches. Keep the input system untouched until commit.
     private var deferredRemoteEdits: [TextEdit] = []
     private var hasDeferredRemoteChanges = false
+    private var markers: [String: UIView] = [:]
 
     init(session: DocumentSession) {
       self.session = session
@@ -76,6 +82,14 @@ struct CollaborativeTextView: UIViewRepresentable {
       textView.delegate = self
       textView.textStorage.delegate = self
       (textView as? InputTextView)?.didFinishInput = { [weak self] in self?.finishInput() }
+      (textView as? InputTextView)?.handleListInput = { [weak self] range, replacement in
+        self?.handleListInput(in: range, replacement: replacement) ?? false
+      }
+      (textView as? InputTextView)?.geometryChanged = { [weak self] in self?.layoutListMarkers() }
+      (textView as? InputTextView)?.contentSizeCategoryChanged = { [weak self, weak textView] in
+        guard let self, let textView else { return }
+        self.renderFormatting(in: textView)
+      }
       (textView as? InputTextView)?.windowChanged = { [weak self, weak textView] in
         guard let self, let textView else { return }
         if textView.window == nil {
@@ -102,14 +116,20 @@ struct CollaborativeTextView: UIViewRepresentable {
       textView.delegate = nil
       textView.textStorage.delegate = nil
       (textView as? InputTextView)?.didFinishInput = nil
+      (textView as? InputTextView)?.handleListInput = nil
+      (textView as? InputTextView)?.geometryChanged = nil
+      (textView as? InputTextView)?.contentSizeCategoryChanged = nil
+      markers.values.forEach { $0.removeFromSuperview() }
+      markers.removeAll()
       self.textView = nil
     }
 
     func textStorage(
-      _ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorage.EditActions,
+      _ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorage.EditActions,
       range editedRange: NSRange, changeInLength delta: Int
     ) {
       guard !isApplyingRemoteChange, editedMask.contains(.editedCharacters) else { return }
+      // Attribute fixing can widen didProcessEditing's range to the rest of the paragraph.
       let oldEnd = NSMaxRange(editedRange) - delta
       if let pendingRange {
         let lower = min(pendingRange.lowerBound, editedRange.location)
@@ -120,6 +140,24 @@ struct CollaborativeTextView: UIViewRepresentable {
         pendingRange = editedRange.location..<oldEnd
         pendingLength = editedRange.length
       }
+    }
+
+    private func handleListInput(in range: NSRange, replacement: String) -> Bool {
+      guard let textView, textView.markedTextRange == nil, !session.hasMarkedText,
+        pendingRange == nil, !hasDeferredRemoteChanges, let range = Range(range),
+        let selection = Range(textView.selectedRange)
+      else { return false }
+      session.selection = selection
+      do {
+        return try session.handleListInput(in: range, replacement: replacement)
+      } catch {
+        logger.error("Engine rejected list input: \(String(describing: error), privacy: .public)")
+        return true
+      }
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+      layoutListMarkers()
     }
 
     func textViewDidChange(_ textView: UITextView) {
@@ -209,7 +247,7 @@ struct CollaborativeTextView: UIViewRepresentable {
         deferredRemoteEdits.removeAll(keepingCapacity: true)
         apply(surfaceEdits)
       } else {
-        applyTypingAttributes(to: textView)
+        renderFormatting(in: textView)
       }
     }
 
@@ -263,22 +301,134 @@ struct CollaborativeTextView: UIViewRepresentable {
 
     private func applyTypingAttributes(to textView: UITextView) {
       textView.typingAttributes = [
-        .font: session.typingFormatting.font, .foregroundColor: UIColor.label,
+        .font: session.typingFormatting.font(compatibleWith: textView.traitCollection),
+        .foregroundColor: UIColor.label,
       ]
     }
 
     private func renderFormatting(in textView: UITextView) {
       guard textView.markedTextRange == nil else { return }
+      let wasApplyingChange = isApplyingRemoteChange
+      isApplyingRemoteChange = true
+      defer { isApplyingRemoteChange = wasApplyingChange }
       let storage = textView.textStorage
       storage.beginEditing()
-      storage.addAttributes([.font: TextFormatting().font, .foregroundColor: UIColor.label],
-        range: NSRange(location: 0, length: storage.length))
+      storage.addAttributes([
+        .font: TextFormatting().font(compatibleWith: textView.traitCollection), .foregroundColor: UIColor.label,
+        .paragraphStyle: NSParagraphStyle.default,
+      ], range: NSRange(location: 0, length: storage.length))
       for mark in session.snapshot.marks ?? [] {
-        storage.addAttribute(.font, value: mark.formatting.font,
+        storage.addAttribute(.font, value: mark.formatting.font(compatibleWith: textView.traitCollection),
           range: NSRange(location: mark.offset, length: mark.length))
+      }
+      for item in session.snapshot.listItems ?? [] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.firstLineHeadIndent = 44 + CGFloat(item.depth) * 28
+        paragraph.headIndent = paragraph.firstLineHeadIndent
+        paragraph.minimumLineHeight = 44
+        storage.addAttribute(.paragraphStyle, value: paragraph,
+          range: NSRange(location: item.offset, length: item.length + 1))
       }
       storage.endEditing()
       applyTypingAttributes(to: textView)
+      renderListMarkers(in: textView)
+    }
+
+    private func renderListMarkers(in textView: UITextView) {
+      guard let container = textView.superview as? EditingTextContainer else { return }
+      let items = session.snapshot.listItems ?? []
+      let ids = Set(items.map(\.id))
+      for id in Array(markers.keys) where !ids.contains(id) {
+        markers.removeValue(forKey: id)?.removeFromSuperview()
+      }
+      var orderedCounts: [String: Int] = [:]
+      var previousEnd: Int?
+      for item in items {
+        if previousEnd != nil, previousEnd != item.offset { orderedCounts.removeAll(keepingCapacity: true) }
+        previousEnd = item.offset + item.length + 1
+        let parent = item.parent ?? ""
+        if item.kind == .ordered {
+          orderedCounts[parent, default: 0] += 1
+        } else {
+          orderedCounts[parent] = 0
+        }
+        let wantsButton = item.kind == .checklist
+        if let marker = markers[item.id], (marker is UIButton) != wantsButton {
+          marker.removeFromSuperview()
+          markers[item.id] = nil
+        }
+        let marker: UIView
+        if wantsButton {
+          let button = (markers[item.id] as? UIButton) ?? UIButton(type: .system)
+          let checked = item.checked == true
+          button.setImage(UIImage(systemName: checked ? "checkmark.square.fill" : "square"), for: .normal)
+          button.accessibilityIdentifier = "checklist-\(item.id)"
+          let label = (session.text as NSString).substring(
+            with: NSRange(location: item.offset, length: item.length))
+          button.accessibilityLabel = label.isEmpty ? "Empty checklist item" : label
+          button.accessibilityValue = checked ? "Checked" : "Unchecked"
+          button.accessibilityTraits = checked ? [.button, .selected] : [.button]
+          button.accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Toggle") { [weak self] _ in
+              self?.toggleChecklistItem(item.id) ?? false
+            }
+          ]
+          button.removeAction(identifiedBy: UIAction.Identifier("toggle"), for: .touchUpInside)
+          button.addAction(UIAction(identifier: UIAction.Identifier("toggle")) { [weak self] _ in
+            _ = self?.toggleChecklistItem(item.id)
+          }, for: .touchUpInside)
+          marker = button
+        } else {
+          let label = (markers[item.id] as? UILabel) ?? UILabel()
+          label.text = item.kind == .ordered ? "\(orderedCounts[parent, default: 1])." : "•"
+          label.font = .preferredFont(forTextStyle: .body, compatibleWith: textView.traitCollection)
+          label.textColor = .secondaryLabel
+          label.textAlignment = .center
+          label.isAccessibilityElement = false
+          marker = label
+        }
+        markers[item.id] = marker
+        if marker.superview == nil { container.markers.addSubview(marker) }
+      }
+      layoutListMarkers()
+    }
+
+    @discardableResult
+    private func toggleChecklistItem(_ id: String) -> Bool {
+      guard let textView, textView.markedTextRange == nil else { return false }
+      do {
+        try session.toggleChecklistItem(id)
+        return true
+      } catch {
+        logger.error("Engine rejected checklist toggle: \(String(describing: error), privacy: .public)")
+        return false
+      }
+    }
+
+    private func layoutListMarkers() {
+      guard let textView, let container = textView.superview as? EditingTextContainer else { return }
+      container.markers.isHidden = textView.markedTextRange != nil
+      guard !container.markers.isHidden, let manager = textView.textLayoutManager,
+        let content = manager.textContentManager else { return }
+      for item in session.snapshot.listItems ?? [] {
+        guard let marker = markers[item.id],
+          let position = textView.position(from: textView.beginningOfDocument, offset: item.offset)
+        else { continue }
+        let caret = textView.caretRect(for: position)
+        guard let location = content.location(content.documentRange.location, offsetBy: item.offset),
+          let fragment = manager.textLayoutFragment(for: location),
+          let line = fragment.textLineFragments.first,
+          let font = textView.textStorage.attribute(.font, at: item.offset, effectiveRange: nil) as? UIFont
+        else {
+          marker.isHidden = true
+          continue
+        }
+        marker.isHidden = false
+        let baseline = fragment.layoutFragmentFrame.minY + line.typographicBounds.minY + line.glyphOrigin.y
+        let origin = textView.convert(CGPoint(x: caret.minX - 44,
+          y: baseline + textView.textContainerInset.top - font.capHeight / 2 - 22), to: container.markers)
+        marker.frame = CGRect(origin: origin, size: CGSize(width: 44, height: 44))
+      }
     }
 
     private func top(of offset: Int, in textView: UITextView) -> CGFloat {
@@ -289,7 +439,7 @@ struct CollaborativeTextView: UIViewRepresentable {
 }
 
 private extension TextFormatting {
-  var font: UIFont {
+  func font(compatibleWith traitCollection: UITraitCollection) -> UIFont {
     let style: UIFont.TextStyle = switch heading {
     case 1: .title1
     case 2: .title2
@@ -298,7 +448,7 @@ private extension TextFormatting {
     case 5: .subheadline
     default: .body
     }
-    let base = UIFont.preferredFont(forTextStyle: style)
+    let base = UIFont.preferredFont(forTextStyle: style, compatibleWith: traitCollection)
     var traits = base.fontDescriptor.symbolicTraits
     if bold || heading > 0 { traits.insert(.traitBold) }
     if italic { traits.insert(.traitItalic) }
@@ -368,6 +518,37 @@ private final class SessionUndoManager: UndoManager {
   }
 }
 
+/// Checkboxes are siblings of the accessible text view, never hidden inside its accessibility leaf.
+final class EditingTextContainer: UIView {
+  let textView: UITextView = InputTextView()
+  fileprivate let markers: UIView = ListMarkerOverlay()
+
+  init() {
+    super.init(frame: .zero)
+    isAccessibilityElement = false
+    markers.isAccessibilityElement = false
+    markers.clipsToBounds = true
+    addSubview(textView)
+    addSubview(markers)
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    textView.frame = bounds
+    markers.frame = bounds
+    (textView as? InputTextView)?.geometryChanged?()
+  }
+}
+
+private final class ListMarkerOverlay: UIView {
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    let hit = super.hitTest(point, with: event)
+    return hit === self ? nil : hit
+  }
+}
+
 /// UIKit can notify its delegate before updating `markedTextRange`; flush only after the input call.
 private final class InputTextView: UITextView {
   var sessionUndoManager: SessionUndoManager?
@@ -376,6 +557,21 @@ private final class InputTextView: UITextView {
   var didFinishInput: (() -> Void)?
   private(set) var inputDepth = 0
   var windowChanged: (() -> Void)?
+  var handleListInput: ((NSRange, String) -> Bool)?
+  var geometryChanged: (() -> Void)?
+  var contentSizeCategoryChanged: (() -> Void)?
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    geometryChanged?()
+  }
+
+  override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+    super.traitCollectionDidChange(previousTraitCollection)
+    if previousTraitCollection?.preferredContentSizeCategory != traitCollection.preferredContentSizeCategory {
+      contentSizeCategoryChanged?()
+    }
+  }
 
   override func didMoveToWindow() {
     super.didMoveToWindow()
@@ -395,18 +591,28 @@ private final class InputTextView: UITextView {
   }
 
   override func insertText(_ text: String) {
+    if inputDepth == 0, markedTextRange == nil, handleListInput?(selectedRange, text) == true { return }
     inputDepth += 1
     defer { finishInput() }
     super.insertText(text)
   }
 
   override func replace(_ range: UITextRange, withText text: String) {
+    let replacementRange = NSRange(
+      location: offset(from: beginningOfDocument, to: range.start),
+      length: offset(from: range.start, to: range.end))
+    if inputDepth == 0, markedTextRange == nil, handleListInput?(replacementRange, text) == true { return }
     inputDepth += 1
     defer { finishInput() }
     super.replace(range, withText: text)
   }
 
   override func deleteBackward() {
+    var range = selectedRange
+    if range.length == 0, range.location > 0 {
+      range = (text as NSString).rangeOfComposedCharacterSequence(at: range.location - 1)
+    }
+    if inputDepth == 0, markedTextRange == nil, handleListInput?(range, "") == true { return }
     inputDepth += 1
     defer { finishInput() }
     super.deleteBackward()

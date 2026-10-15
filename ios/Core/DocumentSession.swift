@@ -16,7 +16,7 @@ enum DocumentSessionError: LocalizedError {
     case .closed: "The document session is closed."
     case .unsavedInput: "The document session still has unsaved input."
     case .invalidRange: "The editing range must lie on Unicode scalar boundaries inside the document."
-    case .featureDisabled: "The formatting authoring capability is not enabled."
+    case .featureDisabled: "The requested authoring capability is not enabled."
     }
   }
 }
@@ -71,7 +71,7 @@ final class DocumentSession: ObservableObject {
 
   private let store: DocumentStore
   private let doc: YDoc
-  private let body: YText
+  let body: YText
   private let manifest: YMap
   private let undoHistory: YUndoManager
   private let transactionUpdate = Capture<Data>()
@@ -139,19 +139,12 @@ final class DocumentSession: ObservableObject {
     try validate(range)
     let formatting = range == selection ? typingFormatting : inheritedFormatting(at: range.lowerBound)
     try transact { transaction in
-      let offset = UInt32(edit.utf16Offset)
-      if edit.utf16Length > 0 {
-        try transaction.remove(from: body, at: offset, length: UInt32(edit.utf16Length))
-      }
-      if !edit.replacement.isEmpty {
-        try transaction.insert(edit.replacement, into: body, at: offset, attributes: formatting.attributes)
-        try recordFeatures(formatting.features, in: transaction)
-      }
+      try replaceListAware(in: range, with: edit.replacement, formatting: formatting, transaction: transaction)
     }
   }
 
   /// Every plugin mutation uses this same core transaction, undo, and persistence path.
-  private func transact(_ mutation: (YWriteTransaction) throws -> Void) throws {
+  func transact(_ mutation: (YWriteTransaction) throws -> Void) throws {
     try requireOpen()
     _ = transactionDelta.take()
     try doc.write(origin: "local") { try mutation($0) }
@@ -219,13 +212,13 @@ final class DocumentSession: ObservableObject {
     if range.length > 0 { surfaceChanges.send([]) }
   }
 
-  private func recordFeatures(_ features: [String], in transaction: YWriteTransaction) throws {
+  func recordFeatures(_ features: [String], in transaction: YWriteTransaction) throws {
     for feature in features where !featureManifest.contains(feature) {
       try transaction.set(.int(1), forKey: feature, in: manifest)
     }
   }
 
-  private func validate(_ range: Range<Int>) throws {
+  func validate(_ range: Range<Int>) throws {
     guard range.lowerBound >= 0, range.upperBound <= text.utf16.count,
       String.Index(utf16Offset: range.lowerBound, in: text).samePosition(in: text.unicodeScalars) != nil,
       String.Index(utf16Offset: range.upperBound, in: text).samePosition(in: text.unicodeScalars) != nil
@@ -248,6 +241,31 @@ final class DocumentSession: ObservableObject {
     selectedFormatting = selection.isEmpty
       ? SelectedFormatting(typingFormatting) : snapshot.selectedFormatting(in: selection)
     typingFormattingChanges.send()
+  }
+
+  /// Structural commands share the native commit path, then publish the actual engine delta once.
+  func performListEdit(_ mutation: (YWriteTransaction) throws -> Int?) throws {
+    try requireOpen()
+    guard !hasMarkedText else { throw DocumentSessionError.unsavedInput }
+    try validate(selection)
+    let previousSelection = selection
+    var caret: Int?
+    try transact { caret = try mutation($0) }
+    let edits = Self.edits(from: transactionDelta.take() ?? [])
+    if let caret {
+      let offset = min(max(0, caret), text.utf16.count)
+      selection = offset..<offset
+    } else {
+      var lower = previousSelection.lowerBound
+      var upper = previousSelection.upperBound
+      for edit in edits {
+        lower = edit.transform(lower, sticksToPreceding: previousSelection.isEmpty)
+        upper = edit.transform(upper, sticksToPreceding: true)
+      }
+      selection = lower..<max(lower, upper)
+    }
+    updateSelectedFormatting(resetTyping: true)
+    surfaceChanges.send(edits)
   }
 
   func undo() throws {

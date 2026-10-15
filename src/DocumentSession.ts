@@ -1,6 +1,6 @@
 import { NativeModule, requireNativeModule, SharedObject } from 'expo';
 
-import type { FeaturePlugin, HeadingLevel, NativeCapabilities } from './FeaturePlugins';
+import type { FeaturePlugin, HeadingLevel, ListKind, NativeCapabilities } from './FeaturePlugins';
 
 // Provisional session API; the stable editor/hooks API belongs to #19.
 
@@ -38,6 +38,15 @@ export declare class DocumentSession extends SharedObject<DocumentSessionEvents>
   toggleItalic(): Promise<void>;
   /** Formats every selected paragraph; 0 restores ordinary paragraphs. */
   setHeading(level: HeadingLevel | 0): Promise<void>;
+  /** Converts selected paragraphs; null restores ordinary paragraphs and promotes children. */
+  setListKind(kind: ListKind | null): Promise<void>;
+  indentListItem(): Promise<void>;
+  outdentListItem(): Promise<void>;
+  insertReturn(): Promise<void>;
+  deleteBackward(): Promise<void>;
+  removeListItem(id: string, includingChildren?: boolean): Promise<void>;
+  /** Existing checklists remain toggleable when list authoring is disabled. */
+  toggleChecklistItem(id: string): Promise<void>;
   /** Undoes the latest local edit without undoing remote changes. Rejects marked input. */
   undo(): Promise<void>;
   /** Redoes the latest undone local edit. Rejects marked input. */

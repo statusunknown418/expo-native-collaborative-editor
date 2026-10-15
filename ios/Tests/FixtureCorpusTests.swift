@@ -51,7 +51,9 @@ final class FixtureCorpusTests: XCTestCase {
     for (name, steps) in corpus where recorded[name] == nil {
       let store = try DocumentStore(url: temporaryStoreURL())
       let session = try DocumentSessionRegistry(store: store).session(accountNamespace: "fixtures", documentID: name)
-      try session.setPlugins(formattingPlugins())
+      try session.setPlugins(FeaturePlugins(registrations: [
+        formattingRegistration(), listsRegistration()
+      ]))
       for (index, step) in steps.enumerated() {
         switch (name, index) {
         case ("marks", 1): session.selection = 0..<4; try session.toggleBold()
@@ -62,8 +64,20 @@ final class FixtureCorpusTests: XCTestCase {
         case ("marks", 6): session.selection = 0..<6; try session.toggleBold()
         case ("marks", 7): session.selection = 0..<6; try session.toggleItalic()
         case ("marks", 8): session.selection = 14..<21; try session.setHeading(0)
+        case ("nested-lists", 1): session.selection = 0..<0; try session.setListKind(.ordered, itemID: "plan")
+        case ("nested-lists", 2): session.selection = 5..<5; try session.setListKind(.checklist, itemID: "task")
+        case ("nested-lists", 3): session.selection = 10..<10; try session.setListKind(.unordered, itemID: "detail")
+        case ("nested-lists", 4): session.selection = 17..<17; try session.setListKind(.checklist, itemID: "other")
+        case ("nested-lists", 5): session.selection = 5..<5; try session.indentListItem()
+        case ("nested-lists", 6), ("nested-lists", 7):
+          session.selection = 10..<10; try session.indentListItem()
+        case ("nested-lists", 8): try session.toggleChecklistItem("task")
+        case ("nested-lists", 9): try session.toggleChecklistItem("other")
+        case ("nested-lists", 10): try session.removeListItem("task")
+        case ("nested-lists", 11): try session.removeListItem("plan", includingChildren: true)
         default: try session.replaceText(with: step.text)
         }
+        XCTAssertEqual(session.snapshot, step, "\(name) native recording step \(index)")
       }
       waitUntil { session.isSavedOnThisPhone }
       recorded[name] = try store.outbox(for: session.metadata.key).map(\.update)

@@ -13,11 +13,20 @@ struct FeaturePlugins: Equatable {
     var headingLevels = [1, 2, 3, 4, 5, 6]
   }
 
+  struct Lists: Equatable {
+    var ordered = true
+    var unordered = true
+    var checklist = true
+    var caution__enableChecklistChildrenAutoCompletion = false
+  }
+
   static let capabilities: [String: Any] = [
-    "formatting": ["version": 1, "bold": true, "italic": true, "headingLevels": [1, 2, 3, 4, 5, 6]]
+    "formatting": ["version": 1, "bold": true, "italic": true, "headingLevels": [1, 2, 3, 4, 5, 6]],
+    "lists": ["version": 1, "ordered": true, "unordered": true, "checklist": true]
   ]
 
   private(set) var formatting: Formatting?
+  private(set) var lists: Lists?
 
   init() {}
 
@@ -38,6 +47,25 @@ struct FeaturePlugins: Equatable {
       }
       guard capabilities.insert(capability).inserted else {
         throw EditorConfigurationError(message: "Capability registered more than once: \(capability).")
+      }
+      if capability == "lists" {
+        guard Set(options.keys).isSubset(of: [
+          "ordered", "unordered", "checklist", "caution__enableChecklistChildrenAutoCompletion"
+        ]) else { throw EditorConfigurationError(message: "Unknown lists option.") }
+        var normalized = Lists()
+        for (key, value) in options {
+          guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            throw EditorConfigurationError(message: "\(key) must be a boolean.")
+          }
+          switch key {
+          case "ordered": normalized.ordered = number.boolValue
+          case "unordered": normalized.unordered = number.boolValue
+          case "checklist": normalized.checklist = number.boolValue
+          default: normalized.caution__enableChecklistChildrenAutoCompletion = number.boolValue
+          }
+        }
+        lists = normalized
+        continue
       }
       guard Set(options.keys).isSubset(of: ["bold", "italic", "headingLevels"]) else {
         throw EditorConfigurationError(message: "Unknown formatting option.")

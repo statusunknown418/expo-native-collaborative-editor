@@ -112,6 +112,8 @@ Remote updates persist during marked-text composition, but their surface patches
 
 `FormattingTests` covers plugin validation, option changes without content/history reset, mixed selection state, UTF-16 boundaries, incremental mark-only updates, metadata upgrade, concurrent mark/deletion manifest convergence, and concurrent text/formatting on three replicas with recorded seeds 1–20. `EditingSurfaceTests` also exercises native typing fonts, remote mark-only patches, and formatting during composition.
 
+`ListTests` exercises all 27 three-level combinations of ordered, unordered, and checklist items, the ADR 0005 structural commands, stable identities, attributed subtree moves, undo/redo, and restart. `ListEditingSurfaceTests` drives native Return, Backspace, selected deletion, checkbox touch/accessibility actions, composition, scrolling, resizing, and Dynamic Type. `ListPluginTests` covers configuration changes and explicit checklist cascades. The Release UI list scenario creates four mixed levels, toggles parent and child independently, and reopens the saved document.
+
 To use one existing simulator without creating test clones, pass its UDID explicitly rather than using the package's name-based defaults:
 
 ```sh
@@ -160,8 +162,9 @@ The engine-independent projection of a document that tests compare: `SemanticSna
 | `text` | The document text: Unicode scalars exactly as stored, never normalized. |
 | `marks` | Optional, ordered nonoverlapping runs: `{ offset, length, bold?: true, italic?: true, heading?: 1..6 }`. Offsets and lengths count UTF-16 code units. Adjacent equal runs coalesce; plain runs are omitted. |
 | `features` | Optional, sorted semantic requirements, such as `formatting.bold@1`. Monotonic: removing marks or undoing their creation does not remove requirements. |
+| `listItems` | Optional paragraph-order items: `{ id, kind: 'ordered' \| 'unordered' \| 'checklist', parent?, checked?, offset, length, depth }`. UTF-16 offsets start at paragraph text; length excludes the terminating LF. Depth is zero-based; roots omit `parent`, and only checklist items carry `checked`. |
 
-Equality is exact: canonically equivalent text, such as `é` and `e` + U+0301, differs. Empty `marks` and `features` keys are omitted, keeping the existing text scenarios valid. The `marks` scenario covers overlapping bold/italic, headings, surrogate-pair insertion inside a marked run, mark removal, and deletion to an empty document with retained feature requirements.
+Equality is exact: canonically equivalent text, such as `é` and `e` + U+0301, differs. Empty `marks`, `features`, and `listItems` keys are omitted, keeping the existing text scenarios valid. The `marks` scenario covers overlapping bold/italic, headings, surrogate-pair insertion inside a marked run, mark removal, and deletion to an empty document with retained feature requirements. The twelve-step `nested-lists` scenario covers fixed identities, three mixed levels, independent checked states, outdent/indent, and parent/subtree deletion.
 
 ## Formatting feature plugin (provisional, #8)
 
@@ -188,3 +191,37 @@ Collapsed-selection bold/italic commands change native typing attributes without
 `session.state.selectedFormatting` and `stateChange` expose `{ bold, italic, heading }`. `null` means mixed; heading 0 means ordinary paragraphs. The example uses these values for selected button styles and accessibility values, and includes a runtime enable/disable control. Native typing, rendering, commands, and persistence run without per-keystroke JavaScript.
 
 Semantic requirements live in the CRDT root map `features` (`formatting.bold@1`, `formatting.italic@1`, `formatting.heading@1`, value 1), written with the first use in the same transaction and persisted/synchronized through the ordinary outbox. They are not part of the body-only undo scope. The unused SQLite seed column `feature_manifest` is removed on upgrade only when every legacy value is an empty array; nonempty legacy requirements fail visibly rather than being discarded. Application ID, lifecycle generation, and the original provisional schema identifier stay in SQLite metadata.
+
+## Lists/checklists feature plugin (provisional, #9)
+
+```ts
+import { listsPlugin, openDocument } from 'expo-native-collaborative-editor';
+
+const session = await openDocument({
+  accountNamespace: 'account',
+  documentId: 'document',
+  plugins: [listsPlugin()],
+});
+await session.setListKind('checklist'); // Converts the selected paragraphs.
+```
+
+`listsPlugin` registers ID/capability `lists`, version 1, advertised by `nativeCapabilities.lists`. Options `ordered`, `unordered`, and `checklist` default to `true`; `caution__enableChecklistChildrenAutoCompletion` defaults to `false`. Options must be booleans; the same atomic registration validation as formatting applies. Combine `listsPlugin()` and `formattingPlugin()` in the session's plugin array when both are needed. Changing plugins replaces the array, so retain every capability the host still wants enabled.
+
+| Session command | Behavior |
+| --- | --- |
+| `setListKind(kind)` | Converts selected paragraphs to the requested kind while retaining existing item identities. `null` restores ordinary paragraphs and promotes surviving children; a nested conversion first exits the enclosing root subtree, preserving unselected sibling parentage. |
+| `insertReturn()` | Splits text into siblings. The left item retains identity, checked state, and children; the new right item follows that subtree, has a new identity and no children, and starts unchecked. An empty nested item outdents with its subtree; an empty root item exits the list and promotes children. |
+| `deleteBackward()` | At an item start, joins the previous sibling's text while keeping the left identity, kind, checked state, and both child groups in order. Without a previous sibling, outdents or exits the list. Otherwise deletes the selection or previous grapheme. |
+| `indentListItem()` / `outdentListItem()` | Moves the current item and its entire subtree, preserving relative structure and checked states. Indent uses the previous sibling as parent; outdent places the subtree after its former parent's remaining children. |
+| `removeListItem(id, includingChildren = false)` | Removes only that item's paragraph and promotes children one level. Pass `true` to delete the entire subtree. Native selected deletion removes only selected content. |
+| `toggleChecklistItem(id)` | Toggles only that item by default. Existing checklists remain toggleable even when list authoring is disabled. |
+
+Disabling a kind prevents creating/converting items to that kind, not rendering or editing already stored content. Structural commands reject marked-text composition; native input waits for composition to commit. The example provides native list-kind, indent/outdent, and ordinary-paragraph controls without sending document text through JavaScript.
+
+The opt-in `caution__enableChecklistChildrenAutoCompletion` action sets the tapped checklist item and its currently known checklist descendants to the same checked state in one undoable transaction. It never derives parent state from children, runs on open/remote delivery, or imposes a rule on later children. With the option disabled, toggling does no descendant traversal.
+
+Candidate 1 stores list structure only on real LF paragraph terminators in `YText body`: `listID` (stable string), `listKind`, `listDepth` (nonnegative integer), and `listChecked` (boolean, checklist only). Creating a list on an unterminated paragraph adds a real LF; there is no hidden sentinel. Visible text never inherits item identities. Snapshots derive parents from preorder depth, clamp oversized depths to available ancestry, and reset ancestry across ordinary or invalid paragraphs; duplicate IDs are ignored without rewriting shared content.
+
+Semantic requirements `lists.ordered@1`, `lists.unordered@1`, and `lists.checklist@1` use the existing monotonic CRDT `features` map and ordinary durable outbox. Local undo does not erase requirements. Subtree moves preserve formatting runs and item IDs. This remains a representation candidate until the concurrent nested-list proof in #18.
+
+The existing TextKit 2 fallback renders native checkbox buttons beside editable text, with 44-by-44-point hit targets, item-text labels (or “Empty checklist item”), Checked/Unchecked values, selected traits, and a VoiceOver `Toggle` action. Markers follow native scrolling, resizing, and Dynamic Type. The public `testID` identifies the editable `UITextView`, not its checkbox container. Public `TextEditor` checkbox limitations and native proof are recorded in [`m1-evidence.md`](m1-evidence.md#nested-lists-and-checklists-g2g6g12-9).

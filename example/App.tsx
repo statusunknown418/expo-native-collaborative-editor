@@ -6,6 +6,7 @@ import {
   type DocumentSession,
   EditingSurface,
   formattingPlugin,
+  listsPlugin,
   openDocument,
   type ScriptedReplica,
 } from 'expo-native-collaborative-editor';
@@ -35,7 +36,7 @@ export default function App() {
     openDocument({
       accountNamespace: 'example-account',
       documentId,
-      plugins: [formattingPlugin({ headingLevels: [1, 2, 3] })],
+      plugins: [formattingPlugin({ headingLevels: [1, 2, 3] }), listsPlugin()],
     })
       .then(setSession)
       .catch((failure: unknown) => setError(String(failure)));
@@ -104,11 +105,37 @@ function ProofScreen({ session }: { session: DocumentSession }) {
     () =>
       runCommand(async () => {
         await session.setPlugins(
-          formattingEnabled ? [] : [formattingPlugin({ headingLevels: [1, 2, 3] })]
+          formattingEnabled
+            ? [listsPlugin()]
+            : [formattingPlugin({ headingLevels: [1, 2, 3] }), listsPlugin()]
         );
         setFormattingEnabled(!formattingEnabled);
       }),
     [formattingEnabled, runCommand, session]
+  );
+  const handleOrderedList = useCallback(
+    () => runCommand(() => session.setListKind('ordered')),
+    [runCommand, session]
+  );
+  const handleUnorderedList = useCallback(
+    () => runCommand(() => session.setListKind('unordered')),
+    [runCommand, session]
+  );
+  const handleChecklist = useCallback(
+    () => runCommand(() => session.setListKind('checklist')),
+    [runCommand, session]
+  );
+  const handleIndent = useCallback(
+    () => runCommand(() => session.indentListItem()),
+    [runCommand, session]
+  );
+  const handleOutdent = useCallback(
+    () => runCommand(() => session.outdentListItem()),
+    [runCommand, session]
+  );
+  const handleParagraph = useCallback(
+    () => runCommand(() => session.setListKind(null)),
+    [runCommand, session]
   );
 
   return (
@@ -156,6 +183,18 @@ function ProofScreen({ session }: { session: DocumentSession }) {
           ]}
           onPress={handleHeading}
         />
+        <Spacer />
+      </HStack>
+      <HStack modifiers={[padding({ horizontal: 16 })]}>
+        <Button label="Ordered list" onPress={handleOrderedList} />
+        <Button label="Unordered list" onPress={handleUnorderedList} />
+        <Button label="Checklist" onPress={handleChecklist} />
+        <Spacer />
+      </HStack>
+      <HStack modifiers={[padding({ horizontal: 16 })]}>
+        <Button label="Indent" onPress={handleIndent} />
+        <Button label="Outdent" onPress={handleOutdent} />
+        <Button label="Paragraph" onPress={handleParagraph} />
         <Spacer />
       </HStack>
       <HStack modifiers={[padding({ horizontal: 16 })]}>

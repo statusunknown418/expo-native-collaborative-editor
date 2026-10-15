@@ -15,12 +15,28 @@ export type FormattingOptions = {
   headingLevels?: readonly HeadingLevel[];
 };
 
+export type ListKind = 'ordered' | 'unordered' | 'checklist';
+
+export type ListsOptions = {
+  ordered?: boolean;
+  unordered?: boolean;
+  checklist?: boolean;
+  /** Explicitly cascades a user toggle to checklist descendants; no automatic rollup. */
+  caution__enableChecklistChildrenAutoCompletion?: boolean;
+};
+
 export type NativeCapabilities = {
   readonly formatting: {
     readonly version: number;
     readonly bold: boolean;
     readonly italic: boolean;
     readonly headingLevels: readonly HeadingLevel[];
+  };
+  readonly lists: {
+    readonly version: number;
+    readonly ordered: boolean;
+    readonly unordered: boolean;
+    readonly checklist: boolean;
   };
 };
 
@@ -29,13 +45,28 @@ export function formattingPlugin(
   options: FormattingOptions = {}
 ): FeaturePlugin<Required<FormattingOptions>> {
   return {
-    id: 'formatting',
     capability: 'formatting',
-    version: 1,
+    id: 'formatting',
     options: {
       bold: options.bold ?? true,
-      italic: options.italic ?? true,
       headingLevels: [...new Set<HeadingLevel>(options.headingLevels ?? [1, 2, 3, 4, 5, 6])].sort(),
+      italic: options.italic ?? true,
     },
+    version: 1,
+  };
+}
+
+export function listsPlugin(options: ListsOptions = {}): FeaturePlugin<Required<ListsOptions>> {
+  return {
+    capability: 'lists',
+    id: 'lists',
+    options: {
+      caution__enableChecklistChildrenAutoCompletion:
+        options.caution__enableChecklistChildrenAutoCompletion ?? false,
+      checklist: options.checklist ?? true,
+      ordered: options.ordered ?? true,
+      unordered: options.unordered ?? true,
+    },
+    version: 1,
   };
 }

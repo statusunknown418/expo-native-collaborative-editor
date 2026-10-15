@@ -7,25 +7,28 @@ struct SemanticSnapshot: Codable {
   var marks: [SemanticMark]? = nil
   /// Monotonic semantic requirements, independent of enabled authoring plugins and undo history.
   var features: [String]? = nil
+  var listItems: [SemanticListItem]? = nil
 }
 
 extension SemanticSnapshot: Equatable {
   static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.text.unicodeScalars.elementsEqual(rhs.text.unicodeScalars)
-      && lhs.marks == rhs.marks && lhs.features == rhs.features
+      && lhs.marks == rhs.marks && lhs.features == rhs.features && lhs.listItems == rhs.listItems
   }
 }
 
 extension SemanticSnapshot {
   init(body: YText, in doc: YDoc) throws {
     let manifest = try doc.map(named: "features")
-    (text, marks, features) = try doc.read { transaction in
+    (text, marks, features, listItems) = try doc.read { transaction in
       var text = ""
       var marks: [SemanticMark] = []
       var offset = 0
+      var textChunks: [(String, YAttributes)] = []
       for chunk in try transaction.chunks(from: body) {
         guard case .string(let value) = chunk.insert else { continue }
         let formatting = TextFormatting(attributes: chunk.attributes)
+        textChunks.append((value, chunk.attributes))
         text.append(value)
         if formatting != TextFormatting() {
           if let last = marks.last, last.offset + last.length == offset, last.formatting == formatting {
@@ -37,7 +40,8 @@ extension SemanticSnapshot {
         offset += value.utf16.count
       }
       let features = try transaction.entriesJSON(from: manifest).keys.sorted()
-      return (text, marks.isEmpty ? nil : marks, features.isEmpty ? nil : features)
+      let items = projectedListItems(chunks: textChunks)
+      return (text, marks.isEmpty ? nil : marks, features.isEmpty ? nil : features, items.isEmpty ? nil : items)
     }
   }
 

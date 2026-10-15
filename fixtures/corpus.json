@@ -107,5 +107,258 @@
       "text": "",
       "features": ["formatting.bold@1", "formatting.heading@1", "formatting.italic@1"]
     }
+  ],
+  "nested-lists": [
+    { "text": "Plan\nTask\nDetail\nOther\n" },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [{ "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 }],
+      "features": ["lists.ordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 5,
+          "length": 4,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 5,
+          "length": 4,
+          "depth": 0
+        },
+        { "id": "detail", "kind": "unordered", "offset": 10, "length": 6, "depth": 0 }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 5,
+          "length": 4,
+          "depth": 0
+        },
+        { "id": "detail", "kind": "unordered", "offset": 10, "length": 6, "depth": 0 },
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 17,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": false,
+          "parent": "plan",
+          "offset": 5,
+          "length": 4,
+          "depth": 1
+        },
+        { "id": "detail", "kind": "unordered", "offset": 10, "length": 6, "depth": 0 },
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 17,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": false,
+          "parent": "plan",
+          "offset": 5,
+          "length": 4,
+          "depth": 1
+        },
+        {
+          "id": "detail",
+          "kind": "unordered",
+          "parent": "plan",
+          "offset": 10,
+          "length": 6,
+          "depth": 1
+        },
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 17,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": false,
+          "parent": "plan",
+          "offset": 5,
+          "length": 4,
+          "depth": 1
+        },
+        {
+          "id": "detail",
+          "kind": "unordered",
+          "parent": "task",
+          "offset": 10,
+          "length": 6,
+          "depth": 2
+        },
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 17,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": true,
+          "parent": "plan",
+          "offset": 5,
+          "length": 4,
+          "depth": 1
+        },
+        {
+          "id": "detail",
+          "kind": "unordered",
+          "parent": "task",
+          "offset": 10,
+          "length": 6,
+          "depth": 2
+        },
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": false,
+          "offset": 17,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Plan\nTask\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "task",
+          "kind": "checklist",
+          "checked": true,
+          "parent": "plan",
+          "offset": 5,
+          "length": 4,
+          "depth": 1
+        },
+        {
+          "id": "detail",
+          "kind": "unordered",
+          "parent": "task",
+          "offset": 10,
+          "length": 6,
+          "depth": 2
+        },
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": true,
+          "offset": 17,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Plan\nDetail\nOther\n",
+      "listItems": [
+        { "id": "plan", "kind": "ordered", "offset": 0, "length": 4, "depth": 0 },
+        {
+          "id": "detail",
+          "kind": "unordered",
+          "parent": "plan",
+          "offset": 5,
+          "length": 6,
+          "depth": 1
+        },
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": true,
+          "offset": 12,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    },
+    {
+      "text": "Other\n",
+      "listItems": [
+        {
+          "id": "other",
+          "kind": "checklist",
+          "checked": true,
+          "offset": 0,
+          "length": 5,
+          "depth": 0
+        }
+      ],
+      "features": ["lists.checklist@1", "lists.ordered@1", "lists.unordered@1"]
+    }
   ]
 }

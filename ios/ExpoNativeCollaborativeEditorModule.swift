@@ -1,5 +1,4 @@
 import ExpoModulesCore
-import ExpoUI
 
 public class ExpoNativeCollaborativeEditorModule: Module {
   public func definition() -> ModuleDefinition {
@@ -24,6 +23,44 @@ public class ExpoNativeCollaborativeEditorModule: Module {
 
       AsyncFunction("setHeading") { (handle: DocumentSessionHandle, level: Int) throws in
         try MainActor.assumeIsolated { try handle.session.setHeading(level) }
+      }.runOnQueue(.main)
+
+      AsyncFunction("setListKind") { (handle: DocumentSessionHandle, value: String?) throws in
+        let kind: ListKind?
+        if let value {
+          guard let parsed = ListKind(rawValue: value) else {
+            throw Exception(name: "EditorConfigurationError", description: "Unknown list kind.",
+              code: "ERR_EDITOR_CONFIGURATION")
+          }
+          kind = parsed
+        } else {
+          kind = nil
+        }
+        try MainActor.assumeIsolated { try handle.session.setListKind(kind) }
+      }.runOnQueue(.main)
+
+      AsyncFunction("indentListItem") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.indentListItem() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("outdentListItem") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.outdentListItem() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("insertReturn") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.insertReturn() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("deleteBackward") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.deleteBackward() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("removeListItem") { (handle: DocumentSessionHandle, id: String, includingChildren: Bool?) throws in
+        try MainActor.assumeIsolated { try handle.session.removeListItem(id, includingChildren: includingChildren ?? false) }
+      }.runOnQueue(.main)
+
+      AsyncFunction("toggleChecklistItem") { (handle: DocumentSessionHandle, id: String) throws in
+        try MainActor.assumeIsolated { try handle.session.toggleChecklistItem(id) }
       }.runOnQueue(.main)
 
       AsyncFunction("undo") { (handle: DocumentSessionHandle) throws in
@@ -60,7 +97,7 @@ public class ExpoNativeCollaborativeEditorModule: Module {
       try MainActor.assumeIsolated { try ScriptedReplica(connectingTo: handle.session) }
     }.runOnQueue(.main)
 
-    ExpoUIView(EditingSurfaceView.self)
+    View(EditingSurfaceView.self)
   }
 }
 

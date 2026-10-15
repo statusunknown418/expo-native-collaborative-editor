@@ -1,9 +1,14 @@
 // Records Yjs updates for the corpus.json scenarios that updates/js.json lacks. Recorded updates
 // are golden: existing entries are never rewritten.
 import { file as bunFile, write } from 'bun';
-import { Doc } from 'yjs';
+import { Doc, type Text as YText } from 'yjs';
 
-import { type SemanticMark, type SemanticSnapshot, semanticSnapshot } from './semanticSnapshot';
+import {
+  type SemanticListItem,
+  type SemanticMark,
+  type SemanticSnapshot,
+  semanticSnapshot,
+} from './semanticSnapshot';
 
 function changedAttributes(before: SemanticMark | undefined, after: SemanticMark | undefined) {
   const attributes: Record<string, boolean | number | null> = {};
@@ -15,6 +20,45 @@ function changedAttributes(before: SemanticMark | undefined, after: SemanticMark
   return attributes;
 }
 
+function listAttributeChanges(
+  attributes: Record<string, unknown>,
+  item: SemanticListItem | undefined
+) {
+  const desired = {
+    listChecked: item?.kind === 'checklist' ? (item.checked ?? false) : null,
+    listDepth: item?.depth ?? null,
+    listID: item?.id ?? null,
+    listKind: item?.kind ?? null,
+  };
+  const changed: Record<string, string | number | boolean | null> = {};
+  for (const key of ['listID', 'listKind', 'listDepth', 'listChecked'] as const) {
+    if ((attributes[key] ?? null) !== desired[key]) {
+      changed[key] = desired[key];
+    }
+  }
+  return changed;
+}
+
+function formatListSeparators(body: YText, listItems: SemanticListItem[]) {
+  let offset = 0;
+  for (const { insert, attributes = {} } of body.toDelta()) {
+    if (typeof insert !== 'string') {
+      continue;
+    }
+    for (let index = 0; index < insert.length; index += 1) {
+      const item =
+        insert[index] === '\n'
+          ? listItems.find(({ offset: start, length }) => start + length === offset + index)
+          : undefined;
+      const changed = listAttributeChanges(attributes, item);
+      if (Object.keys(changed).length) {
+        body.format(offset + index, 1, changed);
+      }
+    }
+    offset += insert.length;
+  }
+}
+
 /** Yjs updates that take an empty document through `steps`, one transaction per step. */
 const record = (steps: SemanticSnapshot[]): string[] => {
   const doc = new Doc();
@@ -22,7 +66,7 @@ const record = (steps: SemanticSnapshot[]): string[] => {
   const updates: string[] = [];
   doc.on('update', (update: Uint8Array) => updates.push(Buffer.from(update).toString('base64')));
   for (const step of steps) {
-    const { text, marks = [], features = [] } = step;
+    const { text, marks = [], features = [], listItems = [] } = step;
     // The smallest replacement aligned to code points, so no edit splits a surrogate pair.
     const before = [...body.toString()];
     const after = [...text];
@@ -65,6 +109,8 @@ const record = (steps: SemanticSnapshot[]): string[] => {
           body.format(start, length, attributes);
         }
       }
+      // List identity belongs only to real LF separators, never to inserted paragraph text.
+      formatListSeparators(body, listItems);
       const manifest = doc.getMap('features');
       for (const feature of features) {
         if (!manifest.has(feature)) {

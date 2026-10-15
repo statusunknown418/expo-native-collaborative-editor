@@ -1,6 +1,76 @@
 import XCTest
 
 final class ProofScreenTests: XCTestCase {
+  func testMixedNestedListsNativeCheckboxesAndPersistence() {
+    let app = XCUIApplication()
+    app.launchArguments = ["-documentId", "lists-\(UUID().uuidString)"]
+    app.launch()
+    let editor = app.textViews["editing-surface"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 30))
+    editor.tap()
+    app.buttons["Checklist"].tap()
+    editor.typeText("Parent\n")
+    app.buttons["Unordered list"].tap()
+    app.buttons["Indent"].tap()
+    editor.typeText("Group\n")
+    app.buttons["Ordered list"].tap()
+    app.buttons["Indent"].tap()
+    editor.typeText("Step\n")
+    app.buttons["Checklist"].tap()
+    app.buttons["Indent"].tap()
+    editor.typeText("Task")
+    let text = "Parent\nGroup\nStep\nTask\n"
+    waitForValue(text, in: editor)
+    let parent = app.buttons["Parent"]
+    let task = app.buttons["Task"]
+    XCTAssertTrue(parent.waitForExistence(timeout: 5))
+    XCTAssertTrue(task.waitForExistence(timeout: 5))
+    // Accessibility coordinate conversion can introduce floating-point roundoff.
+    XCTAssertGreaterThanOrEqual(parent.frame.width, 44 - 0.001)
+    XCTAssertGreaterThanOrEqual(parent.frame.height, 44 - 0.001)
+    XCTAssertGreaterThanOrEqual(task.frame.width, 44 - 0.001)
+    XCTAssertGreaterThanOrEqual(task.frame.height, 44 - 0.001)
+    XCTAssertGreaterThan(task.frame.minX, parent.frame.minX + 60)
+    waitForValue("Unchecked", in: parent)
+    waitForValue("Unchecked", in: task)
+    parent.tap()
+    waitForValue("Checked", in: parent)
+    waitForValue("Unchecked", in: task)
+    task.tap()
+    waitForValue("Checked", in: task)
+    waitForValue("Checked", in: parent)
+    parent.tap()
+    waitForValue("Unchecked", in: parent)
+    waitForValue("Checked", in: task)
+    app.buttons["Disable formatting"].tap()
+    XCTAssertTrue(app.buttons["Enable formatting"].waitForExistence(timeout: 5))
+    task.tap()
+    waitForValue("Unchecked", in: task)
+    task.tap()
+    waitForValue("Checked", in: task)
+    // Disabling formatting must not unregister list commands or remount the native input.
+    app.buttons["Outdent"].tap()
+    app.buttons["Indent"].tap()
+    waitForValue(text, in: editor)
+    XCTAssertTrue(app.staticTexts["Saved on this phone"].waitForExistence(timeout: 10))
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+    app.buttons["Hide editor"].tap()
+    app.buttons["Show editor"].tap()
+    XCTAssertTrue(editor.waitForExistence(timeout: 5))
+    waitForValue(text, in: editor)
+    waitForValue("Unchecked", in: app.buttons["Parent"])
+    waitForValue("Checked", in: app.buttons["Task"])
+    app.terminate()
+    app.launch()
+    XCTAssertTrue(editor.waitForExistence(timeout: 30))
+    waitForValue(text, in: editor)
+    waitForValue("Unchecked", in: app.buttons["Parent"])
+    waitForValue("Checked", in: app.buttons["Task"])
+    XCTAssertGreaterThan(app.buttons["Task"].frame.minX, app.buttons["Parent"].frame.minX + 60)
+  }
+
   func testFormattingToolbarTypingSelectionRuntimeOptionsAndUndo() {
     let app = XCUIApplication()
     app.launchArguments = ["-documentId", "formatting-\(UUID().uuidString)"]
