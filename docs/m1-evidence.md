@@ -1,12 +1,12 @@
 # M1 evidence log
 
-Findings from M1 tickets, recorded as input to the foundation decision (#18). Nothing here is a decision yet.
+Findings from M1 tickets, recorded as input to the foundation decision (#18). The accepted engine-ordering restriction is recorded in ADR 0007; the final foundation decision remains #18.
 
 ## Engine packaging (G1, #3)
 
 Candidate: Yrs through [SwiftYrs](https://github.com/siuying/SwiftYrs) 0.7.0 (a C-ABI shim over Yrs 0.27, released 2026-09-11), integrated with React Native's `spm_dependency` in `ios/ExpoNativeCollaborativeEditor.podspec`. SwiftYrs was evaluated before YSwift because it binds current Yrs and already exposes the capabilities #1 requires (rich-text attributes, sticky indexes, origin-filtered undo, state vectors, snapshots). YSwift's latest release is 0.2.1 from 2024-04-04; it was not built.
 
-Result: **pass** for packaging. The candidate builds and links through Expo autolinking with no host steps:
+Result: **pass for packaging only**. Unrestricted out-of-order application fails on the bound engine; [#20's decision](#out-of-order-engine-decision-g1g3-20) records the accepted G1/G3 restriction. The candidate builds and links through Expo autolinking with no host steps:
 
 | Configuration | Destination                      | Result             |
 | ------------- | -------------------------------- | ------------------ |
@@ -166,8 +166,39 @@ Physical-device shake-to-undo and three-finger gestures remain unverified; simul
 - `DeliveryHarness` (`ios/Core`) is a test-only in-process server for one document's replicas: it accepts each replica's operations in commit order, appends them to every other replica's feed, and returns a receipt per operation. Every message is delayed (1–6 ticks, so messages reorder) and may be duplicated (20%) or dropped (20%, redelivered once nothing else is in flight). In the example app, `ScriptedReplica` drives it on a 50 ms timer. It is not a sync adapter.
 - A receipt deletes the outbox rows it names in one transaction; IDs no longer pending are ignored. "Pending synchronization" holds while the document's outbox is non-empty, for local-only and synchronized documents alike: connecting a document that was edited local-only uploads its outbox with no migration.
 - An incoming update is committed with its feed position (`deliveries` table) in one transaction before the session applies it. Positions persist contiguously: a position already stored is ignored, a later one waits in memory until the gap fills, and a restart resumes after the last stored position. The commit runs synchronously on the storage queue, blocking the main actor for one commit per remote update.
-- Result: **pass** for text. Seeds 1–20 each run three replicas through 80 random steps (insertions of emoji, ZWJ sequences, combining marks, CJK, Hebrew, and newlines; deletions of up to three grapheme clusters) interleaved with harness ticks. Every seed converges to identical semantic snapshots, redelivering every feed changes nothing, and every store reopens to the converged text with nothing pending. A seed reproduces its run only with fixed engine client IDs, because concurrent insertions at one position are ordered by client ID; `DocumentSessionRegistry.session(…, clientID:)` accepts one for tests.
-- Engine finding: Yrs 0.27 (SwiftYrs 0.7.0) loses deletions that arrive before the insertions they delete are integrated. Three updates from one client (insert `abc`; insert `def` after it; delete three characters at offset 1) yield `aef` applied in order 1,2,3 or 2,1,3, but `adef` in orders 3,2,1, 3,1,2, and 2,3,1. Yjs 13.6.33 yields `aef` in all four. With a harness that accepted operations in arrival order, randomized runs also panicked inside Yrs (`block_store.rs:315`, surfaced as `nativePanic`). Out-of-order application is an engine capability #1 requires; #20 tracks the decision, as input to #18. Until then, no replica applies an update before its dependencies: the server accepts each replica's operations in commit order, so every feed is causally ordered, and replicas apply their feed in position order.
+- Result: **pass for text under causal acceptance and contiguous feed application only**, not arbitrary engine application order. Seeds 1–20 each run three replicas through 80 random steps (insertions of emoji, ZWJ sequences, combining marks, CJK, Hebrew, and newlines; deletions of up to three grapheme clusters) interleaved with harness ticks. Every seed converges to identical semantic snapshots, redelivering every feed changes nothing, and every store reopens to the converged text with nothing pending. A seed reproduces its run only with fixed engine client IDs, because concurrent insertions at one position are ordered by client ID; `DocumentSessionRegistry.session(…, clientID:)` accepts one for tests.
+- Engine finding: the SwiftYrs-bound Yrs revision loses part of an early deletion. With a harness that accepted operations in arrival order, randomized runs also panicked inside Yrs (`block_store.rs:315`, surfaced as `nativePanic`). The direct reproduction and accepted contract below resolve #20's ordering decision, not the remaining non-text G3 checks or the final #18 foundation gate.
+
+### Out-of-order engine decision (G1/G3, #20)
+
+**Decision:** the maintainer selected causal sync order for [#20](https://github.com/statusunknown418/expo-native-collaborative-editor/issues/20). Keep SwiftYrs 0.7.0 and require causal per-replica acceptance, dependency-complete bootstrap/checkpoints, and contiguous replay as specified in [ADR 0007](adr/0007-core-feature-plugins-and-sync-adapters.md#causal-synchronization). This deliberately narrows #1's unrestricted engine-ordering requirement. G1's raw out-of-order capability fails; G3's text evidence passes only inside that contract. No Automerge fallback or custom engine binary is adopted under this accepted restriction.
+
+**Layer and versions:** SwiftYrs v0.7.0's [Cargo.lock](https://github.com/siuying/SwiftYrs/blob/ffdff22f632296b6ed7b1a15f8d8ddeec2d60713/native/yrs-bridge/Cargo.lock#L455-L458) binds Yrs 0.27.0 at git `ae61429251af410f82e85b8c6577cad585b3585a`, not the crates.io 0.27.0 release. The latest non-yanked registry release checked on 2026-10-15 is [Yrs 0.28.0](https://crates.io/crates/yrs/0.28.0), published 2026-09-17. SwiftYrs v0.8.0's [lockfile](https://github.com/siuying/SwiftYrs/blob/46169a5ba38396123c9dfefbf090f7df71154072/native/yrs-bridge/Cargo.lock#L455-L458) still binds the same broken revision; a SwiftYrs-only version bump is not an engine fix.
+
+**Direct Rust proof:** [`internal/yrs-out-of-order`](../internal/yrs-out-of-order) pins both engines and runs the same public Rust APIs, without SwiftYrs. Fixed distinct client IDs, UTF-16 offsets, one transaction per update: insert `abc` at 0; insert `def` at 3; remove 3 characters at 1. Each transaction emits only its own v1 update. The source reads `aef`; a fresh receiver applies all three unique updates before replaying them.
+
+| Arrival order | SwiftYrs-bound Yrs `ae614292` | Yrs 0.28.0 |
+| --- | --- | --- |
+| 1,2,3 | `aef` | `aef` |
+| 1,3,2 | `adef` | `aef` |
+| 2,1,3 | `aef` | `aef` |
+| 2,3,1 | `adef` | `aef` |
+| 3,1,2 | `adef` | `aef` |
+| 3,2,1 | `adef` | `aef` |
+
+Replaying all three updates repairs each old-engine failure; measuring only after replay would conceal lost deletion tails on first delivery. Yrs 0.28.0 passes initial delivery and replay in every order. This establishes a Yrs defect rather than a Swift bridge defect. It does **not** establish that 0.28.0 fixes the separate randomized `BlockStore::push` panic.
+
+Run from the repository root with Rust/Cargo installed (verified with 1.99.0 on macOS arm64):
+
+```sh
+cargo run --manifest-path internal/yrs-out-of-order/Cargo.toml
+```
+
+The diagnostic prints every version/order/delivery/replay result and intentionally exits **1** while the historical revision fails; it is not a passing-suite check. Cargo's generated lockfile and build output stay ignored inside that directory; the app's build still requires no Rust toolchain.
+
+**Upstream:** [y-crdt/y-crdt#719](https://github.com/y-crdt/y-crdt/issues/719) contains the runnable minimal reproduction, exact pins, and observed results, explicitly noting that latest Yrs passes.
+
+**Native contract proof:** `SynchronizationTests.testCausalFeedPreservesAnEarlyDeletionInEveryDeliveryOrder` passes all six transport arrival orders through the actual document session with causal feed positions, checking each contiguous prefix, duplicates, restart, and replay. All seven synchronization tests passed on iOS 26.2 / iPhone 17 Pro Max. The test-only harness still proves neither a production adapter nor durable server acceptance. #18 must carry this accepted ordering limitation into its engine decision.
 
 ## Local store (#3)
 

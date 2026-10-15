@@ -209,6 +209,8 @@ final class DocumentSession: ObservableObject {
   /// Persists a remote update with its position in this replica's delivery feed, then applies it.
   /// Persisted positions stay contiguous: positions already persisted are ignored, and a later one
   /// waits in memory until every position before it has arrived.
+  /// Feed positions must already follow causal acceptance order (ADR 0007); this only repairs
+  /// transport reordering, not a feed whose updates precede their dependencies.
   // ponytail: persists on the main actor, blocking it for one commit per remote update; move to the
   // storage executor if typing traces show it.
   func receive(_ update: Data, at position: Int) throws {

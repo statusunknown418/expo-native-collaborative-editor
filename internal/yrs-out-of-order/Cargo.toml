@@ -1,0 +1,10 @@
+[package]
+name = "yrs-out-of-order"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# SwiftYrs v0.7.0's Cargo.lock binds this git revision, not crates.io 0.27.0.
+yrs_bound = { package = "yrs", git = "https://github.com/y-crdt/y-crdt", rev = "ae61429251af410f82e85b8c6577cad585b3585a", features = ["weak"] }
+yrs_latest = { package = "yrs", version = "=0.28.0", features = ["weak"] }

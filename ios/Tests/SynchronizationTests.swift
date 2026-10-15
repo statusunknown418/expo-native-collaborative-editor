@@ -83,6 +83,39 @@ final class SynchronizationTests: XCTestCase {
     XCTAssertEqual(try DocumentStore(url: url).outbox(for: reopened.metadata.key), [])
   }
 
+  func testCausalFeedPreservesAnEarlyDeletionInEveryDeliveryOrder() throws {
+    let source = try replica(clientID: 1)
+    for text in ["abc", "abcdef", "aef"] {
+      try source.replaceText(with: text)
+      waitUntil { source.isSavedOnThisPhone }
+    }
+    let updates = try source.pendingOperations().map(\.update)
+    let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+
+    for order in orders {
+      let url = temporaryStoreURL()
+      let receiver = try replica(at: url, clientID: 2)
+      var arrived = Set<Int>()
+      var through = 0
+      for index in order {
+        try receiver.receive(updates[index], at: index + 1)
+        try receiver.receive(updates[index], at: index + 1)
+        arrived.insert(index)
+        while arrived.contains(through) { through += 1 }
+        XCTAssertEqual(receiver.text, ["", "abc", "abcdef", "aef"][through], "order \(order)")
+      }
+      XCTAssertEqual(receiver.text, "aef", "order \(order)")
+
+      let reopened = try replica(at: url, clientID: 2)
+      XCTAssertEqual(reopened.text, "aef", "order \(order) after restart")
+      for index in order.reversed() {
+        try reopened.receive(updates[index], at: index + 1)
+      }
+      XCTAssertEqual(reopened.text, "aef", "order \(order) after replay")
+      XCTAssertFalse(reopened.hasPendingSynchronization)
+    }
+  }
+
   func testRemoteEditsKeepTheSelectionAtItsLogicalPosition() throws {
     let original = "Hi 👍🏽 there, world"
     // A caret sticks to the character before it; a range keeps its own characters, so remote text
