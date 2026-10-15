@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["ultracite/biome/core", "ultracite/biome/react"],
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -15,13 +16,50 @@
   },
   "linter": {
     "rules": {
-      "preset": "recommended"
+      "style": {
+        "useConsistentTypeDefinitions": { "level": "error", "options": { "style": "type" } },
+        "useConsistentMethodSignatures": { "level": "error", "options": { "style": "method" } },
+        "useFilenamingConvention": {
+          "level": "error",
+          "options": { "filenameCases": ["camelCase", "PascalCase", "kebab-case"] }
+        }
+      }
     }
+  },
+  "json": {
+    "formatter": { "lineWidth": 100 }
   },
   "javascript": {
     "formatter": {
+      "bracketSameLine": true,
       "quoteStyle": "single",
       "trailingCommas": "es5"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["example/**/*.js", "internal/module_scripts/*.js"],
+      "linter": {
+        "rules": {
+          "correctness": { "noGlobalDirnameFilename": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["src/index.ts"],
+      "linter": {
+        "rules": {
+          "performance": { "noBarrelFile": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["example/App.tsx"],
+      "linter": {
+        "rules": {
+          "correctness": { "noUndeclaredDependencies": "off" }
+        }
+      }
+    }
+  ]
 }

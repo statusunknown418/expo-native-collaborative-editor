@@ -20,7 +20,9 @@ export const semanticSnapshot = (doc: Y.Doc): SemanticSnapshot => {
   const marks: SemanticMark[] = [];
   let offset = 0;
   for (const { insert, attributes = {} } of body.toDelta()) {
-    if (typeof insert !== 'string') continue;
+    if (typeof insert !== 'string') {
+      continue;
+    }
     const { bold, italic, heading } = attributes;
     const formatting = {
       ...(bold === true ? { bold: true as const } : {}),
@@ -38,7 +40,7 @@ export const semanticSnapshot = (doc: Y.Doc): SemanticSnapshot => {
       ) {
         last.length += insert.length;
       } else {
-        marks.push({ offset, length: insert.length, ...formatting });
+        marks.push({ length: insert.length, offset, ...formatting });
       }
     }
     offset += insert.length;

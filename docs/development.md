@@ -60,7 +60,9 @@ Fast Refresh picks up changes to `example/App.tsx` and the module's `src/` (comp
 
 ## Lint and format
 
-Biome replaces ESLint and Prettier for supported files across the module, example, fixtures, and scripts. It uses the existing style: two-space indentation, 100-column lines, single JavaScript quotes, and ES5 trailing commas. Git-ignored build output, dependencies, and generated native projects are excluded; unsupported files such as Swift and Markdown are skipped.
+Biome runs Ultracite 8.0.1's core and React presets for supported files across the module, example, fixtures, and scripts. The lint and format scripts invoke Biome directly; lint-staged invokes the installed Ultracite CLI. Formatting keeps two-space indentation, 100-column lines, single JavaScript quotes, and ES5 trailing commas. Git-ignored build output, dependencies, and generated native projects are excluded; unsupported files such as Swift and Markdown are skipped.
+
+`biome.json` keeps the repository's camelCase/PascalCase filenames, `type` definitions, and method-style event contracts. Narrow overrides allow CommonJS `__dirname` in tooling, the public `src/index.ts` package entry, and the example's module import supplied by its Metro alias rather than an installed dependency.
 
 Run from the repository root:
 
@@ -68,9 +70,22 @@ Run from the repository root:
 bun run lint                # lint without modifying files
 bun run format              # format supported files
 bun run lint-staged         # manually run the staged-file checks
+bunx ultracite doctor        # verify presets and Biome compatibility
 ```
 
-`bun install` installs the Husky pre-commit hook without replacing the module's existing build step. Each commit runs lint-staged, which applies `biome check --write --no-errors-on-unmatched` only to staged files and stages formatting and safe fixes. Remaining errors block the commit; unsafe fixes are never applied. Unstaged hunks stay unstaged. Full builds and tests are not added to the hook.
+`bun install` installs the Husky pre-commit hook without replacing the module's existing build step. Each commit runs lint-staged, which applies `ultracite fix` only to staged files and stages formatting and safe fixes. Remaining errors block the commit; unsafe fixes are never applied. Unstaged hunks stay unstaged. Full builds and tests are not added to the hook.
+
+### Agent auto-fix hooks
+
+Repository-local hooks run Ultracite after file edits:
+
+- Claude Code: `.claude/settings.json`, after `Write` or `Edit`.
+- Codex: `.codex/hooks.json`, after `apply_patch`, including multi-file patches.
+- Cursor: `.cursor/hooks.json`, after `afterFileEdit`.
+
+The hooks use `bunx ultracite fix --skip=correctness/noUnusedImports --hook`. Ultracite reads the edited paths from the hook's stdin payload and applies safe fixes only to those files. Unused imports stay intact while an agent builds a change across multiple edits; the commit-time command still removes unused imports. Remaining lint errors are reported back to the agent.
+
+Run `bun install` before starting agents, and start terminal agents from the repository root. Start a new session to pick up the hook configuration. Codex additionally requires a trusted project and [reviewing/trusting the hook definition through `/hooks`](https://developers.openai.com/codex/hooks#review-and-trust-hooks); changed definitions require review again. No hook-trust bypass is configured.
 
 ## Native tests
 

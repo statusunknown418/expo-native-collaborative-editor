@@ -7,9 +7,11 @@ const path = require('node:path');
 
 const UI_TESTS = 'ExampleUITests';
 const UI_TESTS_DIR = path.join(__dirname, '..', 'uitests');
+const useExpoModules = /^(\s*use_expo_modules!)/m;
+const testablesBlock = /<Testables>[\s\S]*?<\/Testables>/;
 
-const withModuleTestSpec = (config) =>
-  withPodfile(config, (config) => {
+const withModuleTestSpec = (appConfig) =>
+  withPodfile(appConfig, (config) => {
     const modulePath = path.relative(
       config.modRequest.platformProjectRoot,
       path.join(config.modRequest.projectRoot, '..', 'ios')
@@ -17,21 +19,19 @@ const withModuleTestSpec = (config) =>
     // Declared before `use_expo_modules!`, which then skips re-adding the pod without test specs.
     const line = `  pod 'ExpoNativeCollaborativeEditor', :path => '${modulePath}', :testspecs => ['Tests']\n`;
     if (!config.modResults.contents.includes(line)) {
-      config.modResults.contents = config.modResults.contents.replace(
-        /^(\s*use_expo_modules!)/m,
-        `${line}$1`
-      );
+      config.modResults.contents = config.modResults.contents.replace(useExpoModules, `${line}$1`);
     }
     return config;
   });
 
-const withUITestTarget = (config) =>
-  withXcodeProject(config, (config) => {
+const withUITestTarget = (appConfig) =>
+  withXcodeProject(appConfig, (config) => {
     const project = config.modResults;
-    if (project.pbxTargetByName(UI_TESTS)) return config;
+    if (project.pbxTargetByName(UI_TESTS)) {
+      return config;
+    }
 
-    const objects = project.hash.project.objects;
-    const projectId = project.hash.project.rootObject;
+    const { objects, rootObject: projectId } = project.hash.project;
     const pbxProject = objects.PBXProject[projectId];
     const app = project.getFirstTarget();
     const appName = app.firstTarget.name.replace(/"/g, '');
@@ -40,7 +40,7 @@ const withUITestTarget = (config) =>
       objects[isa] ??= {};
       objects[isa][id] = { isa, ...fields };
       objects[isa][`${id}_comment`] = comment;
-      return { value: id, comment };
+      return { comment, value: id };
     };
 
     const sources = fs.readdirSync(UI_TESTS_DIR).filter((file) => file.endsWith('.swift'));
@@ -67,7 +67,7 @@ const withUITestTarget = (config) =>
     objects.PBXGroup[pbxProject.productRefGroup].children.push(product);
 
     const sourcesPhase = add('PBXSourcesBuildPhase', 'Sources', {
-      buildActionMask: 2147483647,
+      buildActionMask: 2_147_483_647,
       files: fileRefs.map((ref) =>
         add('PBXBuildFile', `${ref.comment} in Sources`, {
           fileRef: ref.value,
@@ -144,7 +144,6 @@ const withUITestTarget = (config) =>
          </TestableReference>
       </Testables>`;
     const scheme = fs.readFileSync(schemePath, 'utf8');
-    const testablesBlock = /<Testables>[\s\S]*?<\/Testables>/;
     if (!testablesBlock.test(scheme)) {
       throw new Error(`withNativeTests: no <Testables> block in ${schemePath}`);
     }

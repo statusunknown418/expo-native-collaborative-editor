@@ -3,10 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const SUBTARGETS = ['plugin', 'cli', 'utils', 'scripts'];
-const target = process.argv[2];
+const [, , target] = process.argv;
 
 if (target && SUBTARGETS.includes(target)) {
-  fs.rmSync(path.join(process.cwd(), target, 'build'), { recursive: true, force: true });
+  fs.rmSync(path.join(process.cwd(), target, 'build'), { force: true, recursive: true });
 } else {
-  fs.rmSync(path.join(process.cwd(), 'build'), { recursive: true, force: true });
+  fs.rmSync(path.join(process.cwd(), 'build'), { force: true, recursive: true });
 }

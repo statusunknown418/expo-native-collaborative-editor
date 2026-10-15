@@ -8,7 +8,7 @@ let args = process.argv.slice(2);
 
 // If the command is used like `yarn test plugin`, set the --rootDir option to the `plugin` directory
 if (SUBTARGETS.includes(args[0])) {
-  const target = args[0];
+  const [target] = args;
   const targetDir = path.join(process.cwd(), target);
   const restArgs = args.slice(1);
   args = ['--rootDir', target];

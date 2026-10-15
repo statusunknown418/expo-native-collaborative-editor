@@ -2,37 +2,43 @@
   "name": "expo-native-collaborative-editor",
   "version": "0.1.0",
   "description": "Native-first collaborative editor, no expo-dom, plug and play adapters for sync engines",
-  "main": "build/index.js",
-  "types": "build/index.d.ts",
-  "scripts": {
-    "build": "node internal/module_scripts/build.js",
-    "dev": "bun run --parallel dev:module dev:example",
-    "dev:module": "bun run build --watch",
-    "dev:example": "bun run --cwd example ios",
-    "clean": "node internal/module_scripts/clean.js",
-    "lint": "biome lint .",
-    "format": "biome format --write .",
-    "lint-staged": "lint-staged",
-    "test": "node internal/module_scripts/test.js",
-    "prepare": "node internal/module_scripts/prepare.js && husky",
-    "open:ios": "node internal/module_scripts/open-ios.js"
-  },
-  "lint-staged": {
-    "*": "biome check --write --no-errors-on-unmatched"
-  },
   "keywords": [
     "react-native",
     "expo",
     "expo-native-collaborative-editor",
     "ExpoNativeCollaborativeEditor"
   ],
-  "repository": "https://github.com/statusunknown418/expo-native-collaborative-editor",
+  "homepage": "https://github.com/statusunknown418/expo-native-collaborative-editor#readme",
   "bugs": {
     "url": "https://github.com/statusunknown418/expo-native-collaborative-editor/issues"
   },
-  "author": "statusunknown418 <alvaro@stackkstudios.com> (https://github.com/statusunknown418)",
+  "repository": "https://github.com/statusunknown418/expo-native-collaborative-editor",
   "license": "MIT",
-  "homepage": "https://github.com/statusunknown418/expo-native-collaborative-editor#readme",
+  "author": "statusunknown418 <alvaro@stackkstudios.com> (https://github.com/statusunknown418)",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "scripts": {
+    "build": "node internal/module_scripts/build.js",
+    "clean": "node internal/module_scripts/clean.js",
+    "dev": "bun run --parallel dev:module dev:example",
+    "dev:example": "bun run --cwd example ios",
+    "dev:module": "bun run build --watch",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "lint-staged": "lint-staged",
+    "open:ios": "node internal/module_scripts/open-ios.js",
+    "prepare": "node internal/module_scripts/prepare.js && husky",
+    "test": "node internal/module_scripts/test.js"
+  },
+  "lint-staged": {
+    "*": "ultracite fix"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "roots": [
+      "<rootDir>/src"
+    ]
+  },
   "dependencies": {},
   "devDependencies": {
     "@babel/core": "^7.26.0",
@@ -50,13 +56,8 @@
     "react": "19.2.3",
     "react-native": "0.86.3",
     "typescript": "~6.0.3",
+    "ultracite": "8.0.1",
     "yjs": "13.6.33"
-  },
-  "jest": {
-    "preset": "jest-expo",
-    "roots": [
-      "<rootDir>/src"
-    ]
   },
   "peerDependencies": {
     "@expo/ui": "~57.0.23",

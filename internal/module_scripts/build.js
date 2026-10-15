@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const SUBTARGETS = ['plugin', 'cli', 'utils', 'scripts'];
 const args = process.argv.slice(2);
-const target = args[0];
+const [target] = args;
 
 let tscArgs;
 if (SUBTARGETS.includes(target)) {
