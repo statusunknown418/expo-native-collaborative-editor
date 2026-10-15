@@ -191,6 +191,129 @@ final class EditingSurfaceTests: XCTestCase {
     try harness.runUntilIdle()
     XCTAssertEqual(remote.text, "あ!RaaZ")
   }
+
+  func testNativeUndoAndRedoPreserveRemoteEditsAndSynchronize() throws {
+    let local = try replica()
+    let remote = try replica()
+    let harness = DeliveryHarness(seed: 1, faults: .none)
+    try harness.connect(local)
+    try harness.connect(remote)
+    try remote.replaceText(with: "Base")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    let surface = Surface(session: local)
+    let view = surface.textView
+    let manager = try XCTUnwrap(view.undoManager)
+    XCTAssertFalse(manager.canUndo, "remote text must not enter native or local history")
+    view.selectedRange = NSRange(location: 4, length: 0)
+    view.insertText(" local")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    try remote.replaceText(in: 0..<0, with: "Remote ")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(view.text, "Remote Base local")
+
+    manager.undo()
+    XCTAssertEqual(view.text, "Remote Base")
+    XCTAssertEqual(local.text, "Remote Base")
+    XCTAssertFalse(manager.canUndo)
+    manager.undo()
+    XCTAssertEqual(view.text, "Remote Base", "no UIKit text stack may undo remote characters")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(remote.text, "Remote Base")
+
+    manager.redo()
+    XCTAssertEqual(view.text, "Remote Base local")
+    XCTAssertEqual(local.text, "Remote Base local")
+    XCTAssertFalse(manager.canRedo)
+    manager.redo()
+    XCTAssertEqual(view.text, "Remote Base local", "redo must not replay a native text stack")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(remote.text, "Remote Base local")
+  }
+
+  func testRemountAndNativeStackClearingKeepSessionHistory() throws {
+    let session = try replica()
+    var surface: Surface? = Surface(session: session)
+    surface!.textView.insertText("Kept")
+    XCTAssertEqual(session.text, "Kept")
+    surface!.textView.undoManager?.removeAllActions()
+    surface!.textView.undoManager?.removeAllActions(withTarget: surface!.textView)
+    XCTAssertFalse(try XCTUnwrap(surface!.textView.undoManager).isUndoRegistrationEnabled)
+    surface = nil
+
+    let remounted = Surface(session: session)
+    let view = remounted.textView
+    let manager = try XCTUnwrap(view.undoManager)
+    XCTAssertEqual(view.text, "Kept")
+    XCTAssertTrue(manager.canUndo)
+    manager.undo()
+    XCTAssertEqual(view.text, "")
+    XCTAssertEqual(session.text, "")
+    manager.redo()
+    XCTAssertEqual(view.text, "Kept")
+    view.selectedRange = NSRange(location: 4, length: 0)
+    view.insertText("!")
+    manager.undo()
+    XCTAssertEqual(view.text, "Kept")
+    manager.undo()
+    XCTAssertEqual(view.text, "")
+    XCTAssertFalse(manager.canUndo)
+  }
+
+  func testSessionHistoryCommandsPatchMountedSurfaceAndCloseDisablesEditing() throws {
+    let registry = try DocumentSessionRegistry(store: DocumentStore(url: temporaryStoreURL()))
+    let session = try registry.session(accountNamespace: "input", documentID: "history")
+    let surface = Surface(session: session)
+    let view = surface.textView
+    view.insertText("Hello")
+
+    try session.undo()
+    XCTAssertEqual(view.text, "")
+    XCTAssertTrue(try XCTUnwrap(view.undoManager).canRedo)
+    try session.redo()
+    XCTAssertEqual(view.text, "Hello")
+    waitUntil { session.isSavedOnThisPhone }
+    try registry.close(session)
+    XCTAssertFalse(view.isEditable)
+    XCTAssertFalse(try XCTUnwrap(view.undoManager).canUndo)
+    XCTAssertFalse(try XCTUnwrap(view.undoManager).canRedo)
+  }
+
+  func testNativeUndoCommitsMarkedInputBeforeUndoAndRedo() throws {
+    let local = try replica()
+    let remote = try replica()
+    let harness = DeliveryHarness(seed: 1, faults: .none)
+    try harness.connect(local)
+    try harness.connect(remote)
+    try remote.replaceText(with: "Left right")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    let surface = Surface(session: local)
+    let view = surface.textView
+    let manager = try XCTUnwrap(view.undoManager)
+    view.selectedRange = NSRange(location: 5, length: 0)
+    view.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0))
+    try remote.replaceText(in: 0..<0, with: "👋 ")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertTrue(manager.canUndo, "provisional input must expose native undo")
+
+    manager.undo()
+    XCTAssertNil(view.markedTextRange)
+    XCTAssertEqual(view.text, "👋 Left right")
+    XCTAssertEqual(local.text, "👋 Left right")
+    XCTAssertTrue(manager.canRedo)
+    manager.redo()
+    XCTAssertEqual(view.text, "👋 Left 日本right")
+    XCTAssertEqual(local.text, "👋 Left 日本right")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(remote.text, "👋 Left 日本right")
+  }
 }
 
 /// Hosts the same SwiftUI representable as the example, with a real first-responder UITextView.
@@ -213,6 +336,10 @@ private final class Surface {
   }
 
   deinit {
-    MainActor.assumeIsolated { window.isHidden = true }
+    MainActor.assumeIsolated {
+      textView.resignFirstResponder()
+      window.isHidden = true
+      window.rootViewController = nil
+    }
   }
 }

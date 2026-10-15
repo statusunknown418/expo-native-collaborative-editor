@@ -29,16 +29,19 @@ struct CollaborativeTextView: UIViewRepresentable {
 
   func makeUIView(context: Context) -> UITextView {
     let textView = InputTextView()
+    textView.sessionUndoManager = SessionUndoManager(session: session, textView: textView)
     textView.font = .preferredFont(forTextStyle: .body)
     textView.adjustsFontForContentSizeCategory = true
-    textView.text = session.text
-    textView.selectedRange = NSRange(session.selection)
-    textView.delegate = context.coordinator
     context.coordinator.bind(textView)
     return textView
   }
 
   func updateUIView(_ textView: UITextView, context: Context) {}
+
+  static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
+    (textView as? InputTextView)?.windowChanged = nil
+    coordinator.unbind(textView)
+  }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(session: session)
@@ -48,7 +51,8 @@ struct CollaborativeTextView: UIViewRepresentable {
   final class Coordinator: NSObject, UITextViewDelegate, @MainActor NSTextStorageDelegate {
     private let session: DocumentSession
     private weak var textView: UITextView?
-    private var remoteChanges: AnyCancellable?
+    private var surfaceChanges: AnyCancellable?
+    private var closedChanges: AnyCancellable?
     private var isApplyingRemoteChange = false
     /// One replacement from committed document coordinates to the surface's uncommitted text.
     private var pendingRange: Range<Int>?
@@ -62,9 +66,34 @@ struct CollaborativeTextView: UIViewRepresentable {
 
     func bind(_ textView: UITextView) {
       self.textView = textView
+      isApplyingRemoteChange = true
+      textView.text = session.text
+      textView.selectedRange = NSRange(session.selection)
+      isApplyingRemoteChange = false
+      textView.delegate = self
       textView.textStorage.delegate = self
       (textView as? InputTextView)?.didFinishInput = { [weak self] in self?.finishInput() }
-      remoteChanges = session.remoteChanges.sink { [weak self] in self?.apply($0) }
+      (textView as? InputTextView)?.windowChanged = { [weak self, weak textView] in
+        guard let self, let textView else { return }
+        if textView.window == nil {
+          self.unbind(textView)
+        } else if self.textView == nil {
+          self.bind(textView)
+        }
+      }
+      surfaceChanges = session.surfaceChanges.sink { [weak self] in self?.apply($0) }
+      closedChanges = session.$isClosed.sink { [weak textView] in textView?.isEditable = !$0 }
+    }
+
+    func unbind(_ textView: UITextView) {
+      surfaceChanges?.cancel()
+      surfaceChanges = nil
+      closedChanges?.cancel()
+      closedChanges = nil
+      textView.delegate = nil
+      textView.textStorage.delegate = nil
+      (textView as? InputTextView)?.didFinishInput = nil
+      self.textView = nil
     }
 
     func textStorage(
@@ -224,10 +253,81 @@ struct CollaborativeTextView: UIViewRepresentable {
   }
 }
 
+/// UIKit supplies the gestures, menus, and key commands; the engine owns every history entry.
+private final class SessionUndoManager: UndoManager {
+  private let session: DocumentSession
+  private weak var textView: UITextView?
+
+  @MainActor
+  init(session: DocumentSession, textView: UITextView) {
+    self.session = session
+    self.textView = textView
+    super.init()
+    disableUndoRegistration()
+  }
+
+  override var canUndo: Bool {
+    MainActor.assumeIsolated {
+      !session.isClosed && (session.canUndo || textView?.markedTextRange != nil)
+    }
+  }
+
+  override var canRedo: Bool {
+    MainActor.assumeIsolated { session.canRedo }
+  }
+
+  override func undo() {
+    MainActor.assumeIsolated {
+      textView?.unmarkText()
+      do {
+        try session.undo()
+      } catch {
+        logger.error("Engine rejected undo: \(String(describing: error), privacy: .public)")
+      }
+    }
+  }
+
+  override func redo() {
+    MainActor.assumeIsolated {
+      textView?.unmarkText()
+      do {
+        try session.redo()
+      } catch {
+        logger.error("Engine rejected redo: \(String(describing: error), privacy: .public)")
+      }
+    }
+  }
+
+  override func enableUndoRegistration() {
+    // UIKit may balance its own disable/enable calls, but native history must stay disabled.
+  }
+
+  override func removeAllActions() {
+    super.removeAllActions()
+    // UIKit clears its stack on mount/unmount. This must neither clear engine history nor
+    // reenable native recording (UndoManager.removeAllActions resets registration).
+    if isUndoRegistrationEnabled { disableUndoRegistration() }
+  }
+
+  override func removeAllActions(withTarget target: Any) {
+    super.removeAllActions(withTarget: target)
+    if isUndoRegistrationEnabled { disableUndoRegistration() }
+  }
+}
+
 /// UIKit can notify its delegate before updating `markedTextRange`; flush only after the input call.
 private final class InputTextView: UITextView {
+  var sessionUndoManager: SessionUndoManager?
+  override var undoManager: UndoManager? { sessionUndoManager }
+
   var didFinishInput: (() -> Void)?
   private(set) var inputDepth = 0
+  var windowChanged: (() -> Void)?
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    windowChanged?()
+  }
 
   override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
     inputDepth += 1

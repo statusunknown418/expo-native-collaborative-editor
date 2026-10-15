@@ -5,6 +5,18 @@ import os
 
 private let logger = Logger(subsystem: "expo.modules.nativecollaborativeeditor", category: "DocumentSession")
 
+enum DocumentSessionError: LocalizedError {
+  case closed
+  case unsavedInput
+
+  var errorDescription: String? {
+    switch self {
+    case .closed: "The document session is closed."
+    case .unsavedInput: "The document session still has unsaved input."
+    }
+  }
+}
+
 /// The live, editable state of one document. Engine access and published state are confined to the
 /// main actor; commits run on the store's storage executor.
 // `ObservableObject`, not `@Observable`: the macro expands to `Observation.…`, which SwiftYrs's
@@ -14,6 +26,9 @@ final class DocumentSession: ObservableObject {
   let metadata: DocumentMetadata
   /// Plain-text projection of the engine state.
   @Published private(set) var text: String
+  @Published private(set) var canUndo = false
+  @Published private(set) var canRedo = false
+  @Published private(set) var isClosed = false
   /// Every local update is durable and the input system holds no marked text ("Saved on this phone").
   @Published private(set) var isSavedOnThisPhone = true
   /// Marked text belongs to the input system, not the document or outbox.
@@ -32,15 +47,16 @@ final class DocumentSession: ObservableObject {
   /// The editing surface's selection, in UTF-16 offsets into `text`. Transient: remote changes move
   /// it with the text it selects, and it is never stored.
   var selection = 0..<0
-  /// Each remote change once `text` and `selection` reflect it: the edits it made, in order, each
-  /// offset into the text the edits before it produced.
-  let remoteChanges = PassthroughSubject<[TextEdit], Never>()
+  /// Each remote or history change once `text` and `selection` reflect it: the edits it made, in
+  /// order, each offset into the text the edits before it produced.
+  let surfaceChanges = PassthroughSubject<[TextEdit], Never>()
   /// The last position of this replica's delivery feed persisted and applied.
   private(set) var deliveredThrough: Int
 
   private let store: DocumentStore
   private let doc: YDoc
   private let body: YText
+  private let undoHistory: YUndoManager
   private let transactionUpdate = Capture<Data>()
   private let transactionDelta = Capture<[YTextDeltaOperation]>()
   private var observations: [SwiftYrs.Observation] = []
@@ -68,6 +84,10 @@ final class DocumentSession: ObservableObject {
     text = try SemanticSnapshot(body: body, in: doc).text
     hasPendingSynchronization = !(try store.outbox(for: metadata.key).isEmpty)
     deliveredThrough = try store.deliveredThrough(metadata.key)
+    // Replayed content is committed state, never part of this session's undo history.
+    undoHistory = YUndoManager(document: doc)
+    try undoHistory.addScope(body)
+    undoHistory.includeOrigin("local")
     // Registered after replay so they only see this session's transactions.
     observations = [
       try doc.observeUpdates { [transactionUpdate] event in
@@ -82,6 +102,7 @@ final class DocumentSession: ObservableObject {
   /// Applies a local edit, given as the surface's whole new text, as one engine transaction and
   /// commits its incremental update.
   func replaceText(with newText: String) throws {
+    try requireOpen()
     guard let edit = TextEdit(from: text, to: newText) else { return }
     try commit(edit)
   }
@@ -93,8 +114,9 @@ final class DocumentSession: ObservableObject {
   }
 
   private func commit(_ edit: TextEdit) throws {
+    try requireOpen()
     let offset = UInt32(edit.utf16Offset)
-    try doc.write { transaction in
+    try doc.write(origin: "local") { transaction in
       if edit.utf16Length > 0 {
         try transaction.remove(from: body, at: offset, length: UInt32(edit.utf16Length))
       }
@@ -102,7 +124,54 @@ final class DocumentSession: ObservableObject {
         try transaction.insert(edit.replacement, into: body, at: offset)
       }
     }
+    // One committed input replacement is one action; remote transactions never join it.
+    undoHistory.stopCapturing()
     text = try SemanticSnapshot(body: body, in: doc).text
+    persistLocalUpdate()
+    updateHistoryAvailability()
+  }
+
+  func undo() throws {
+    try changeHistory(redo: false)
+  }
+
+  func redo() throws {
+    try changeHistory(redo: true)
+  }
+
+  private func changeHistory(redo: Bool) throws {
+    try requireOpen()
+    guard !hasMarkedText else { throw DocumentSessionError.unsavedInput }
+    _ = transactionDelta.take()
+    if redo {
+      _ = try undoHistory.redo()
+    } else {
+      _ = try undoHistory.undo()
+    }
+    persistLocalUpdate()
+    updateHistoryAvailability()
+    try publishSurfaceChanges()
+  }
+
+  private func updateHistoryAvailability() {
+    canUndo = undoHistory.undoStackCount > 0
+    canRedo = undoHistory.redoStackCount > 0
+  }
+
+  private func requireOpen() throws {
+    guard !isClosed else { throw DocumentSessionError.closed }
+  }
+
+  fileprivate func close() throws {
+    guard !isClosed else { return }
+    guard !hasMarkedText, !hasUncommittedOperations else { throw DocumentSessionError.unsavedInput }
+    undoHistory.clear()
+    updateHistoryAvailability()
+    isClosed = true
+  }
+
+  /// Every engine-originated local update, including undo/redo, uses the same durable outbox path.
+  private func persistLocalUpdate() {
     guard let update = transactionUpdate.take() else { return }
 
     revision += 1
@@ -143,6 +212,7 @@ final class DocumentSession: ObservableObject {
   // ponytail: persists on the main actor, blocking it for one commit per remote update; move to the
   // storage executor if typing traces show it.
   func receive(_ update: Data, at position: Int) throws {
+    try requireOpen()
     guard position > deliveredThrough else { return }
     earlyDeliveries[position] = update
     while let next = earlyDeliveries[deliveredThrough + 1] {
@@ -155,8 +225,13 @@ final class DocumentSession: ObservableObject {
 
   private func applyRemote(_ update: Data) throws {
     _ = transactionDelta.take()
-    try doc.apply(.v1(update))
+    try doc.write(origin: "remote") { try $0.apply(.v1(update)) }
     _ = transactionUpdate.take()  // A remote update, not a local one to commit.
+    updateHistoryAvailability()
+    try publishSurfaceChanges()
+  }
+
+  private func publishSurfaceChanges() throws {
     let edits = Self.edits(from: transactionDelta.take() ?? [])
     guard !edits.isEmpty else { return }
 
@@ -170,7 +245,7 @@ final class DocumentSession: ObservableObject {
       upper = edit.transform(upper, sticksToPreceding: true)
     }
     selection = lower..<max(lower, upper)
-    remoteChanges.send(edits)
+    surfaceChanges.send(edits)
   }
 
   /// The edits a text delta makes, in order, each offset into the text the edits before it produced.
@@ -209,7 +284,7 @@ private final class Capture<Value>: @unchecked Sendable {
 @MainActor
 final class DocumentSessionRegistry {
   private let store: DocumentStore
-  private var sessions: [DocumentKey: WeakSession] = [:]
+  private var sessions: [DocumentKey: DocumentSession] = [:]
 
   init(store: DocumentStore) {
     self.store = store
@@ -222,13 +297,17 @@ final class DocumentSessionRegistry {
   /// is random. Tests fix it, because concurrent insertions at one position order by client ID.
   func session(accountNamespace: String, documentID: String, clientID: UInt64? = nil) throws -> DocumentSession {
     let metadata = try store.openOrCreateDocument(accountNamespace: accountNamespace, documentID: documentID)
-    if let live = sessions[metadata.key]?.session { return live }
+    if let live = sessions[metadata.key] { return live }
     let session = try DocumentSession(metadata: metadata, store: store, clientID: clientID)
-    sessions[metadata.key] = WeakSession(session: session)
+    sessions[metadata.key] = session
     return session
   }
-}
 
-private struct WeakSession {
-  weak var session: DocumentSession?
+  /// Only the host closes a session. Refuse to drop input whose commit is still pending or failed.
+  func close(_ session: DocumentSession) throws {
+    try session.close()
+    if sessions[session.metadata.key] === session {
+      sessions.removeValue(forKey: session.metadata.key)
+    }
+  }
 }

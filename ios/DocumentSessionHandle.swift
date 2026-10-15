@@ -7,9 +7,14 @@ final class DocumentSessionHandle: SharedObject, @unchecked Sendable {
   private struct State: Equatable {
     var savedOnThisPhone: Bool
     var pendingSynchronization: Bool
+    var canUndo: Bool
+    var canRedo: Bool
 
     var payload: [String: Any] {
-      ["savedOnThisPhone": savedOnThisPhone, "pendingSynchronization": pendingSynchronization]
+      [
+        "savedOnThisPhone": savedOnThisPhone, "pendingSynchronization": pendingSynchronization,
+        "canUndo": canUndo, "canRedo": canRedo,
+      ]
     }
   }
 
@@ -22,9 +27,12 @@ final class DocumentSessionHandle: SharedObject, @unchecked Sendable {
   init(session: DocumentSession) {
     self.session = session
     published = Mutex(
-      State(savedOnThisPhone: session.isSavedOnThisPhone, pendingSynchronization: session.hasPendingSynchronization))
+      State(
+        savedOnThisPhone: session.isSavedOnThisPhone, pendingSynchronization: session.hasPendingSynchronization,
+        canUndo: session.canUndo, canRedo: session.canRedo))
     super.init()
-    stateSubscription = session.$isSavedOnThisPhone.combineLatest(session.$hasPendingSynchronization)
+    stateSubscription = session.$isSavedOnThisPhone.combineLatest(
+      session.$hasPendingSynchronization, session.$canUndo, session.$canRedo)
       .map(State.init)
       .dropFirst()
       .removeDuplicates()

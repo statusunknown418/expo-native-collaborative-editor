@@ -1,5 +1,5 @@
 import { Button, HStack, Host, Spacer, Text, VStack } from '@expo/ui/swift-ui';
-import { padding } from '@expo/ui/swift-ui/modifiers';
+import { disabled, padding } from '@expo/ui/swift-ui/modifiers';
 import { useEvent } from 'expo';
 import {
   connectScriptedReplica,
@@ -21,16 +21,23 @@ const remoteEdits: { offset: number; deleteCount: number; text: string }[] = JSO
 
 export default function App() {
   const [session, setSession] = useState<DocumentSession | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    openDocument({ accountNamespace: 'example-account', documentId }).then(setSession);
+    openDocument({ accountNamespace: 'example-account', documentId })
+      .then(setSession)
+      .catch((error: unknown) => setError(String(error)));
   }, []);
 
-  return <Host style={{ flex: 1 }}>{session ? <ProofScreen session={session} /> : null}</Host>;
+  return (
+    <Host style={{ flex: 1 }}>
+      {session ? <ProofScreen session={session} /> : error ? <Text>{error}</Text> : null}
+    </Host>
+  );
 }
 
 function ProofScreen({ session }: { session: DocumentSession }) {
-  const { savedOnThisPhone, pendingSynchronization } = useEvent(
+  const { savedOnThisPhone, pendingSynchronization, canUndo, canRedo } = useEvent(
     session,
     'stateChange',
     session.state
@@ -38,9 +45,23 @@ function ProofScreen({ session }: { session: DocumentSession }) {
   const [showsEditor, setShowsEditor] = useState(true);
   const [replica, setReplica] = useState<ScriptedReplica | null>(null);
   const [nextRemoteEdit, setNextRemoteEdit] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  async function runCommand(command: () => Promise<void>) {
+    setError(null);
+    try {
+      await command();
+    } catch (error) {
+      setError(String(error));
+    }
+  }
 
   useEffect(() => {
-    if (remoteEdits.length > 0) connectScriptedReplica(session).then(setReplica);
+    if (remoteEdits.length > 0) {
+      connectScriptedReplica(session)
+        .then(setReplica)
+        .catch((error: unknown) => setError(String(error)));
+    }
   }, [session]);
 
   return (
@@ -52,9 +73,11 @@ function ProofScreen({ session }: { session: DocumentSession }) {
           <Button
             label="Remote edit"
             onPress={() => {
-              const { offset, deleteCount, text } = remoteEdits[nextRemoteEdit];
-              replica.edit(offset, deleteCount, text);
-              setNextRemoteEdit(nextRemoteEdit + 1);
+              void runCommand(async () => {
+                const { offset, deleteCount, text } = remoteEdits[nextRemoteEdit];
+                await replica.edit(offset, deleteCount, text);
+                setNextRemoteEdit(nextRemoteEdit + 1);
+              });
             }}
           />
         ) : null}
@@ -63,6 +86,20 @@ function ProofScreen({ session }: { session: DocumentSession }) {
           onPress={() => setShowsEditor(!showsEditor)}
         />
       </HStack>
+      <HStack modifiers={[padding({ horizontal: 16 })]}>
+        <Button
+          label="Undo"
+          modifiers={[disabled(!canUndo)]}
+          onPress={() => void runCommand(() => session.undo())}
+        />
+        <Button
+          label="Redo"
+          modifiers={[disabled(!canRedo)]}
+          onPress={() => void runCommand(() => session.redo())}
+        />
+        <Spacer />
+      </HStack>
+      {error ? <Text>{error}</Text> : null}
       {replica ? (
         <HStack modifiers={[padding({ horizontal: 16 })]}>
           <Text>{pendingSynchronization ? 'Pending synchronization' : 'Acknowledged'}</Text>

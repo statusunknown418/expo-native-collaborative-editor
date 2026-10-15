@@ -1,6 +1,6 @@
 import { NativeModule, requireNativeModule, SharedObject } from 'expo';
 
-// Unstable until the M1 foundation decision (#1).
+// Provisional session API; the stable editor/hooks API belongs to #19.
 
 export type DocumentSessionState = {
   /** Every local edit is durable on this device; marked input is still unsaved. */
@@ -10,6 +10,10 @@ export type DocumentSessionState = {
    * synchronizes.
    */
   pendingSynchronization: boolean;
+  /** Whether this open session has a local edit available to undo. */
+  canUndo: boolean;
+  /** Whether this open session has an undone local edit available to redo. */
+  canRedo: boolean;
 };
 
 export type DocumentSessionEvents = {
@@ -19,6 +23,15 @@ export type DocumentSessionEvents = {
 /** Handle to a shared native document session. It carries state, never document content. */
 export declare class DocumentSession extends SharedObject<DocumentSessionEvents> {
   readonly state: DocumentSessionState;
+  /** Undoes the latest local edit without undoing remote changes. Rejects marked input. */
+  undo(): Promise<void>;
+  /** Redoes the latest undone local edit. Rejects marked input. */
+  redo(): Promise<void>;
+  /**
+   * Explicitly closes the native session and discards its undo history. Rejects unsaved input,
+   * pending commits, or failed commits, leaving the session open. Releasing a JS handle does not close it.
+   */
+  close(): Promise<void>;
 }
 
 export type OpenDocumentOptions = {

@@ -150,6 +150,155 @@ final class DocumentSessionTests: XCTestCase {
     XCTAssertFalse(otherAccount === first)
     XCTAssertEqual(otherAccount.text, "")
   }
+
+  func testRegistryKeepsDocumentOpenAfterLastJavaScriptHandleIsReleased() throws {
+    let registry = DocumentSessionRegistry(store: try DocumentStore(url: temporaryStoreURL()))
+    weak var retained: DocumentSession?
+    do {
+      let handle = DocumentSessionHandle(
+        session: try registry.session(accountNamespace: "account-a", documentID: "doc-1"))
+      retained = handle.session
+      try handle.session.replaceText(with: "Navigation survives")
+      waitUntil { handle.session.isSavedOnThisPhone }
+    }
+
+    XCTAssertNotNil(retained, "releasing the last handle must not close the document session")
+    let reopened = try registry.session(accountNamespace: "account-a", documentID: "doc-1")
+    XCTAssertTrue(reopened === retained)
+    XCTAssertEqual(reopened.text, "Navigation survives")
+    XCTAssertTrue(reopened.canUndo)
+    try reopened.undo()
+    XCTAssertEqual(reopened.text, "")
+    try reopened.redo()
+    XCTAssertEqual(reopened.text, "Navigation survives")
+    waitUntil { reopened.isSavedOnThisPhone }
+  }
+
+  func testSelectiveUndoAndRedoPreserveRemoteEditsOnEveryReplica() throws {
+    let local = try replica()
+    let remote = try replica()
+    let observer = try replica()
+    let harness = DeliveryHarness(seed: 7, faults: .unreliable)
+    for session in [local, remote, observer] { try harness.connect(session) }
+    try remote.replaceText(with: "Left old right")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertFalse(local.canUndo, "remote content must not enter local history")
+    try local.undo()
+    XCTAssertEqual(local.text, "Left old right")
+    XCTAssertTrue(try local.pendingOperations().isEmpty)
+
+    try local.replaceText(in: 5..<8, with: "日本")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    try remote.replaceText(in: 0..<0, with: "👋 ")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+
+    try local.undo()
+    XCTAssertEqual(local.text, "👋 Left old right")
+    XCTAssertFalse(local.canUndo)
+    XCTAssertTrue(local.canRedo)
+    waitUntil { local.isSavedOnThisPhone }
+    XCTAssertTrue(local.hasPendingSynchronization)
+    try harness.runUntilIdle()
+    for session in [local, remote, observer] {
+      XCTAssertEqual(session.text, "👋 Left old right")
+    }
+
+    // Remote transactions must preserve redo, too.
+    let end = remote.text.utf16.count
+    try remote.replaceText(in: end..<end, with: "!")
+    waitUntil { remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    try local.redo()
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    for session in [local, remote, observer] {
+      XCTAssertEqual(session.text, "👋 Left 日本 right!")
+      XCTAssertFalse(session.hasPendingSynchronization)
+    }
+    XCTAssertTrue(local.canUndo)
+    XCTAssertFalse(local.canRedo)
+  }
+
+  func testUndoAndRedoPersistOnlyTheirIncrementalChange() throws {
+    let url = temporaryStoreURL()
+    let store = try DocumentStore(url: url)
+    let registry = DocumentSessionRegistry(store: store)
+    let session = try registry.session(accountNamespace: "account-a", documentID: "doc-1")
+    let original = twentyThousandCharacterFixture
+    let offset = original[..<original.index(original.startIndex, offsetBy: 10_000)].utf16.count
+    try session.replaceText(with: original)
+    try session.replaceText(in: offset..<offset, with: "x")
+    try session.undo()
+    XCTAssertEqual(session.text, original)
+    waitUntil { session.isSavedOnThisPhone }
+    let undoUpdates = try store.updates(for: session.metadata.key)
+    XCTAssertEqual(try replicaDelta(applying: undoUpdates), [.retain(UInt32(offset)), .delete(1)])
+    XCTAssertLessThan(undoUpdates.last!.count, 100)
+
+    try session.redo()
+    waitUntil { session.isSavedOnThisPhone }
+    let redoUpdates = try store.updates(for: session.metadata.key)
+    XCTAssertEqual(try replicaDelta(applying: redoUpdates), [.retain(UInt32(offset)), .insert(.string("x"))])
+    XCTAssertLessThan(redoUpdates.last!.count, 100)
+    let committed = session.text
+    let pending = try session.pendingOperations()
+    XCTAssertEqual(pending.map(\.update), redoUpdates)
+    try registry.close(session)
+    let reopened = try registry.session(accountNamespace: "account-a", documentID: "doc-1")
+    XCTAssertEqual(reopened.text, committed)
+    XCTAssertEqual(try reopened.pendingOperations(), pending)
+    XCTAssertFalse(reopened.canUndo)
+    XCTAssertFalse(reopened.canRedo)
+    try reopened.undo()
+    XCTAssertEqual(reopened.text, committed)
+    XCTAssertEqual(try reopened.pendingOperations(), pending)
+
+    // A stale handle's repeated close must not close the newly opened session.
+    try registry.close(session)
+    XCTAssertTrue(try registry.session(accountNamespace: "account-a", documentID: "doc-1") === reopened)
+    XCTAssertThrowsError(try session.replaceText(with: "closed"))
+    XCTAssertThrowsError(try session.undo())
+    XCTAssertThrowsError(try session.redo())
+
+    let relaunched = try replica(at: url)
+    XCTAssertEqual(relaunched.text, committed)
+    XCTAssertEqual(try relaunched.pendingOperations(), pending)
+    XCTAssertFalse(relaunched.canUndo)
+    XCTAssertFalse(relaunched.canRedo)
+  }
+
+  func testCloseRefusesPendingCommitsAndMarkedInputWithoutDroppingHistory() throws {
+    let storage = DispatchQueue(label: "test.close.storage")
+    let registry = DocumentSessionRegistry(store: try DocumentStore(url: temporaryStoreURL(), queue: storage))
+    let session = try registry.session(accountNamespace: "account-a", documentID: "doc-1")
+    do {
+      storage.suspend()
+      defer { storage.resume() }
+      try session.replaceText(with: "kept")
+      XCTAssertThrowsError(try registry.close(session))
+      XCTAssertFalse(session.isClosed)
+      XCTAssertTrue(session.canUndo)
+    }
+    waitUntil { session.isSavedOnThisPhone }
+    session.hasMarkedText = true
+    XCTAssertThrowsError(try registry.close(session))
+    XCTAssertThrowsError(try session.undo())
+    XCTAssertEqual(session.text, "kept")
+    XCTAssertFalse(session.isClosed)
+    session.hasMarkedText = false
+    try session.undo()
+    XCTAssertEqual(session.text, "")
+    try session.replaceText(with: "new action")
+    XCTAssertFalse(session.canRedo, "a new local action must invalidate redo")
+    waitUntil { session.isSavedOnThisPhone }
+    try registry.close(session)
+    XCTAssertTrue(session.isClosed)
+    XCTAssertFalse(session.canUndo)
+    XCTAssertFalse(session.canRedo)
+  }
 }
 
 // MARK: - Helpers

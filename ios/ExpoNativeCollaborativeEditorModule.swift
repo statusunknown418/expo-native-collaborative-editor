@@ -7,6 +7,18 @@ public class ExpoNativeCollaborativeEditorModule: Module {
 
     Class("DocumentSession", DocumentSessionHandle.self) {
       Property("state") { (handle: DocumentSessionHandle) in handle.state }
+
+      AsyncFunction("undo") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.undo() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("redo") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try handle.session.redo() }
+      }.runOnQueue(.main)
+
+      AsyncFunction("close") { (handle: DocumentSessionHandle) throws in
+        try MainActor.assumeIsolated { try documentSessionRegistry().close(handle.session) }
+      }.runOnQueue(.main)
     }
 
     AsyncFunction("openDocument") { (accountNamespace: String, documentID: String) throws -> DocumentSessionHandle in
