@@ -40,6 +40,12 @@ Toolchain used to verify the baseline:
 
 Bun is the only package manager. Commit `bun.lock` changes; do not add other lockfiles.
 
+### Swift 6.4 framework compatibility
+
+The example's Bun patch for `expo-modules-jsi@57.1.2` fixes its framework sanitizer: Swift 6.4 emits `__ObjC::` instead of `__ObjC.`, so the old filter left private C++ conformances in the public Swift interface and imports failed with `cannot find type '__ObjC::expo' in scope`. The patch handles both spellings; `bun install` in `example/` applies it and the framework's source hash triggers a rebuild. Remove the patch when an upstream fix passes the native build.
+
+Regression check from `example/`: `bun run test:ios:unit -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/BaselineTests`. This compiles the real Expo/editor import chain.
+
 ## From a clean clone
 
 ```sh
@@ -96,7 +102,7 @@ bun run test:ios:unit       # module unit tests: scheme ExpoNativeCollaborativeE
 bun run test:ios:ui         # example UI tests: app scheme, Release build (JS bundle embedded, no Metro)
 ```
 
-`bun run ios` and both test scripts use the simulator in `example/package.json` `config` (`simulator`, `simulatorOS`); edit those values to target a different iOS 26 simulator. The test scripts pass `-quiet` to `xcodebuild`, so a passing run prints only warnings; failures print `error:` lines and exit non-zero.
+`bun run ios` and all native test scripts reuse the existing simulator pinned by UDID in `example/package.json` `config.simulator`. Native tests run serially with `-parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1`; do not create or clone simulators or fall back to another device. If the pinned simulator is unavailable, stop and report it. The unit and UI test scripts pass `-quiet` to `xcodebuild`, so a passing run prints only warnings; failures exit non-zero.
 
 - Unit tests live in `ios/Tests/` and build as the podspec's `Tests` test spec.
 - UI tests live in `example/uitests/` and build as the `ExampleUITests` target.
@@ -113,17 +119,6 @@ Remote updates persist during marked-text composition, but their surface patches
 `FormattingTests` covers plugin validation, option changes without content/history reset, mixed selection state, UTF-16 boundaries, incremental mark-only updates, metadata upgrade, concurrent mark/deletion manifest convergence, and concurrent text/formatting on three replicas with recorded seeds 1–20. `EditingSurfaceTests` also exercises native typing fonts, remote mark-only patches, and formatting during composition.
 
 `ListTests` exercises all 27 three-level combinations of ordered, unordered, and checklist items, the ADR 0005 structural commands, stable identities, attributed subtree moves, undo/redo, restart, the stored block layout, and the deterministic projection of malformed structure without writes. `ConcurrentListTests` runs the seven G4 concurrent scenarios between two replicas and G3's 20 recorded seeds of random concurrent text, mark, structure, and checklist edits on three replicas (ADR 0008 records the results). `ListEditingSurfaceTests` drives native Return, Backspace, selected deletion, checkbox touch/accessibility actions, composition, scrolling, resizing, and Dynamic Type. `ListPluginTests` covers configuration changes and explicit checklist cascades. The Release UI list scenario creates four mixed levels, toggles parent and child independently, and reopens the saved document; `RemoteEditTests` also runs the scripted concurrent nested-list scenario on the editing surface.
-
-To use one existing simulator without creating test clones, pass its UDID explicitly rather than using the package's name-based defaults:
-
-```sh
-xcodebuild test -workspace ios/exponativecollaborativeeditorexample.xcworkspace \
-  -scheme ExpoNativeCollaborativeEditor-Unit-Tests \
-  -destination 'platform=iOS Simulator,id=ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF' \
-  -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1
-```
-
-For the example UI suite, use scheme `exponativecollaborativeeditorexample` and add `-configuration Release`. Run both commands from `example/`.
 
 `example/plugins/withNativeTests.js` wires both into the generated project during prebuild: it adds the module pod with `:testspecs => ['Tests']` to the Podfile, and adds the `ExampleUITests` target (every `example/uitests/*.swift` file) to the app's Xcode project and scheme. After adding a Swift file to either directory, rerun `bunx expo prebuild --platform ios --clean`.
 

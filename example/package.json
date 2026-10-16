@@ -1,8 +1,20 @@
 {
   "name": "expo-native-collaborative-editor-example",
-  "license": "0BSD",
   "version": "1.0.0",
+  "private": true,
+  "license": "0BSD",
   "main": "index.ts",
+  "scripts": {
+    "ios": "expo run:ios --device \"$npm_package_config_simulator\"",
+    "prebuild": "expo prebuild --platform ios",
+    "start": "expo start",
+    "test:fixtures": "bun test ../fixtures && set -o pipefail && xcodebuild test -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme ExpoNativeCollaborativeEditor-Unit-Tests -destination \"platform=iOS Simulator,id=$npm_package_config_simulator\" -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/FixtureCorpusTests | grep -E 'error:|[*][*] TEST'",
+    "test:ios:ui": "xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme exponativecollaborativeeditorexample -configuration Release -destination \"platform=iOS Simulator,id=$npm_package_config_simulator\" -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1",
+    "test:ios:unit": "xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme ExpoNativeCollaborativeEditor-Unit-Tests -destination \"platform=iOS Simulator,id=$npm_package_config_simulator\" -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1"
+  },
+  "config": {
+    "simulator": "ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF"
+  },
   "dependencies": {
     "@expo/ui": "~57.0.23",
     "expo": "~57.0.28",
@@ -13,22 +25,12 @@
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
   },
-  "scripts": {
-    "start": "expo start",
-    "prebuild": "expo prebuild --platform ios",
-    "ios": "expo run:ios --device \"$npm_package_config_simulator\"",
-    "test:ios:unit": "xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme ExpoNativeCollaborativeEditor-Unit-Tests -destination \"platform=iOS Simulator,name=$npm_package_config_simulator,OS=$npm_package_config_simulatorOS\"",
-    "test:ios:ui": "xcodebuild test -quiet -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme exponativecollaborativeeditorexample -configuration Release -destination \"platform=iOS Simulator,name=$npm_package_config_simulator,OS=$npm_package_config_simulatorOS\"",
-    "test:fixtures": "bun test ../fixtures && set -o pipefail && xcodebuild test -workspace ios/exponativecollaborativeeditorexample.xcworkspace -scheme ExpoNativeCollaborativeEditor-Unit-Tests -destination \"platform=iOS Simulator,name=$npm_package_config_simulator,OS=$npm_package_config_simulatorOS\" -only-testing:ExpoNativeCollaborativeEditor-Unit-Tests/FixtureCorpusTests | grep -E 'error:|[*][*] TEST'"
-  },
-  "config": {
-    "simulator": "iPhone 17 Pro",
-    "simulatorOS": "26.2"
-  },
-  "private": true,
   "expo": {
     "autolinking": {
       "nativeModulesDir": ".."
     }
+  },
+  "patchedDependencies": {
+    "expo-modules-jsi@57.1.2": "patches/expo-modules-jsi@57.1.2.patch"
   }
 }

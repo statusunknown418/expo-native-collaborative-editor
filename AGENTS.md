@@ -1,6 +1,6 @@
 ## Development
 
-Bun only, iOS 26 only. Install, prebuild, launch, and native test commands plus toolchain pins: `docs/development.md`.
+Bun only, iOS 26 only. Native runs/tests must reuse the existing simulator pinned in `example/package.json`; never create or clone simulators. Install, prebuild, launch, and native test commands plus toolchain pins: `docs/development.md`.
 
 ## Agent skills
 
