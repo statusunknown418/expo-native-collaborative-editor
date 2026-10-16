@@ -6,6 +6,147 @@ import XCTest
 
 @MainActor
 final class ListEditingSurfaceTests: XCTestCase {
+  func testUnorderedHyphensAndCaretMatchOrdinaryTextWithoutChangingDocumentOnRemount() throws {
+    let session = try makeSession()
+    try session.replaceText(with: "Added\nAdded")
+    var surface = ListSurface(session: session)
+    let plain = try [5, 11].map { try caretAndBaseline(in: surface.textView, at: $0) }
+    session.selection = 0..<11
+    try session.setListKind(.unordered)
+    let snapshot = session.snapshot
+    let selection = session.selection
+    let canUndo = session.canUndo
+    let canRedo = session.canRedo
+    waitUntil { session.isSavedOnThisPhone }
+    var updates = 0
+    let changes = session.surfaceChanges.sink { _ in updates += 1 }
+    defer { changes.cancel() }
+    surface = ListSurface(session: session)
+    XCTAssertEqual(session.snapshot, snapshot)
+    XCTAssertEqual(session.selection, selection)
+    XCTAssertEqual(surface.textView.selectedRange, NSRange(selection))
+    XCTAssertEqual(session.canUndo, canUndo)
+    XCTAssertEqual(session.canRedo, canRedo)
+    XCTAssertEqual(updates, 0)
+    XCTAssertEqual(surface.labels.map(\.text), ["-", "-"])
+    var previous: CGRect?
+    for (index, offset) in [5, 11].enumerated() {
+      let (caret, baseline) = try caretAndBaseline(in: surface.textView, at: offset)
+      XCTAssertEqual(caret.height, plain[index].0.height, accuracy: 1)
+      XCTAssertEqual(baseline - caret.minY, plain[index].1 - plain[index].0.minY, accuracy: 1)
+      if let previous { XCTAssertGreaterThanOrEqual(caret.minY, previous.maxY) }
+      previous = caret
+    }
+    surface.textView.undoManager?.undo()
+    XCTAssertEqual(session.text, "Added\nAdded")
+    XCTAssertNil(session.snapshot.listItems)
+    surface.textView.undoManager?.redo()
+    XCTAssertEqual(session.snapshot, snapshot)
+  }
+
+  func testListFirstLineMarkersAndNativeCaretsSurviveWrappingNestingResizeScrollAndDynamicType() throws {
+    let session = try makeSession()
+    try seed(session, [
+      Line("empty", "", .checklist),
+      Line("wrapped", String(repeating: "Added ", count: 12), .unordered, depth: 1),
+      Line("ordered", "Added", .ordered),
+      Line("final", "Added", .unordered, depth: 1),
+    ], trailingLF: false)
+    let snapshot = session.snapshot
+    let surface = ListSurface(session: session)
+    let textView = surface.textView
+    let controller = try XCTUnwrap(surface.window.rootViewController)
+    for category in [UIContentSizeCategory.large, .accessibilityExtraExtraExtraLarge] {
+      controller.traitOverrides.preferredContentSizeCategory = category
+      for width in [CGFloat(393), 300] {
+        surface.window.frame.size.width = width
+        controller.view.setNeedsLayout()
+        surface.window.layoutIfNeeded()
+        for scroll in [CGFloat(0), 60] {
+          textView.contentOffset.y = scroll
+          surface.window.layoutIfNeeded()
+          XCTAssertEqual(surface.labels.map(\.text), ["-", "1.", "-"])
+          let markers: [UIView] = [try surface.checkbox("empty")] + surface.labels
+          var rootX: CGFloat?
+          for (item, marker) in zip(try XCTUnwrap(session.snapshot.listItems), markers) {
+            let start = try XCTUnwrap(textView.position(from: textView.beginningOfDocument, offset: item.offset))
+            let firstCaret = textView.caretRect(for: start)
+            let (_, baseline) = try caretAndBaseline(in: textView, at: item.offset + 1)
+            let font = try XCTUnwrap(textView.textStorage.attribute(.font, at: item.offset, effectiveRange: nil) as? UIFont)
+            let frame = marker.convert(marker.bounds, to: textView)
+            XCTAssertEqual(frame.midY, baseline - font.capHeight / 2, accuracy: 1)
+            XCTAssertLessThanOrEqual(frame.maxX, firstCaret.minX)
+            if item.depth == 0 { rootX = firstCaret.minX }
+            if item.depth == 1 {
+              XCTAssertGreaterThan(firstCaret.minX, try XCTUnwrap(rootX))
+            }
+            let (endCaret, _) = try caretAndBaseline(in: textView, at: item.offset + item.length)
+            let ordinary = UITextView()
+            ordinary.frame = textView.bounds
+            ordinary.font = font
+            ordinary.text = "Added"
+            ordinary.layoutIfNeeded()
+            let reference = ordinary.caretRect(for: ordinary.endOfDocument)
+            XCTAssertEqual(firstCaret.height, reference.height, accuracy: 2)
+            XCTAssertEqual(endCaret.height, reference.height, accuracy: 2)
+            if item.id == "wrapped" {
+              XCTAssertGreaterThan(endCaret.minY, firstCaret.maxY)
+              XCTAssertGreaterThanOrEqual(endCaret.minX, firstCaret.minX - 1)
+            }
+          }
+          let checkbox = try surface.checkbox("empty")
+          XCTAssertGreaterThanOrEqual(checkbox.bounds.width, 44)
+          XCTAssertGreaterThanOrEqual(checkbox.bounds.height, 44)
+          XCTAssertEqual(session.snapshot, snapshot)
+          XCTAssertEqual(textView.text, snapshot.text)
+        }
+      }
+    }
+  }
+
+  private func caretAndBaseline(in textView: UITextView, at offset: Int) throws -> (CGRect, CGFloat) {
+    let position = try XCTUnwrap(textView.position(from: textView.beginningOfDocument, offset: offset))
+    textView.selectedRange = NSRange(location: offset, length: 0)
+    let caret = textView.caretRect(for: position)
+    let manager = try XCTUnwrap(textView.textLayoutManager)
+    let content = try XCTUnwrap(manager.textContentManager)
+    let start = try XCTUnwrap(content.location(content.documentRange.location, offsetBy: max(0, offset - 1)))
+    let end = try XCTUnwrap(content.location(start, offsetBy: 1))
+    let range = try XCTUnwrap(NSTextRange(location: start, end: end))
+    var baseline: CGFloat?
+    manager.enumerateTextSegments(in: range, type: .standard, options: []) { _, rect, value, _ in
+      baseline = rect.minY + value + textView.textContainerInset.top
+      return false
+    }
+    return (caret, try XCTUnwrap(baseline))
+  }
+
+  func testEmptyFinalListItemsKeepIndentedCaretAndVisibleMarker() throws {
+    for kind in ListKind.allCases {
+      let session = try makeSession()
+      try seed(session, [Line("root", "Added", .unordered), Line("empty", "", kind, depth: 1)],
+        trailingLF: false)
+      let surface = ListSurface(session: session)
+      let textView = surface.textView
+      let caret = textView.caretRect(for: textView.endOfDocument)
+      let root = textView.caretRect(for: textView.beginningOfDocument)
+      XCTAssertEqual(caret.minX, root.minX + 28, accuracy: 1)
+      XCTAssertEqual(caret.height, root.height, accuracy: 1)
+      let marker: UIView = kind == .checklist
+        ? try surface.checkbox("empty") : try XCTUnwrap(surface.labels.last)
+      XCTAssertFalse(marker.isHidden)
+      let frame = marker.convert(marker.bounds, to: textView)
+      XCTAssertEqual(frame.maxX, caret.minX, accuracy: 1)
+      XCTAssertTrue(frame.intersects(caret.insetBy(dx: -1, dy: 0)))
+      textView.insertText("Added")
+      XCTAssertEqual(session.text, "Added\nAdded")
+      XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["root", "empty"])
+      textView.undoManager?.undo()
+      XCTAssertEqual(session.text, "Added\n")
+      XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["root", "empty"])
+    }
+  }
+
   func testNativeReturnSplitsEveryKindAfterItsChildrenKeepingLeftIdentityAndCompletion() throws {
     for kind in ListKind.allCases {
       let session = try makeSession()
@@ -298,8 +439,8 @@ final class ListEditingSurfaceTests: XCTestCase {
     return session
   }
 
-  private func seed(_ session: DocumentSession, _ lines: [Line]) throws {
-    try session.replaceText(with: lines.map(\.text).joined(separator: "\n") + "\n")
+  private func seed(_ session: DocumentSession, _ lines: [Line], trailingLF: Bool = true) throws {
+    try session.replaceText(with: lines.map(\.text).joined(separator: "\n") + (trailingLF ? "\n" : ""))
     var offset = 0
     for line in lines {
       session.selection = offset..<offset
@@ -344,6 +485,10 @@ private final class ListSurface {
   }
 
   var buttons: [UIButton] { Self.descendants(window).compactMap { $0 as? UIButton } }
+  var labels: [UILabel] {
+    Self.descendants(window).compactMap { $0 as? UILabel }.filter { !$0.isAccessibilityElement }
+      .sorted { $0.frame.minY < $1.frame.minY }
+  }
 
   func checkbox(_ id: String) throws -> UIButton {
     try XCTUnwrap(buttons.first { $0.accessibilityIdentifier == "checklist-\(id)" })

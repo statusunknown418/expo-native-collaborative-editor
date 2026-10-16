@@ -35,6 +35,9 @@ struct CollaborativeTextView: UIViewRepresentable {
     (textView as? InputTextView)?.sessionUndoManager = SessionUndoManager(session: session, textView: textView)
     textView.font = .preferredFont(forTextStyle: .body)
     textView.adjustsFontForContentSizeCategory = true
+    // Keep the first/last 44-point marker targets inside the scrollable surface.
+    textView.textContainerInset.top = 22
+    textView.textContainerInset.bottom = 22
     context.coordinator.bind(textView)
     return container
   }
@@ -300,10 +303,29 @@ struct CollaborativeTextView: UIViewRepresentable {
     }
 
     private func applyTypingAttributes(to textView: UITextView) {
-      textView.typingAttributes = [
-        .font: session.typingFormatting.font(compatibleWith: textView.traitCollection),
+      let font = session.typingFormatting.font(compatibleWith: textView.traitCollection)
+      var attributes: [NSAttributedString.Key: Any] = [
+        .font: font,
         .foregroundColor: UIColor.label,
       ]
+      // An empty final item has no storage character on which to put its indentation.
+      if session.selection.lowerBound == textView.textStorage.length,
+        let item = session.snapshot.listItems?.last, item.offset == session.selection.lowerBound
+      {
+        attributes[.paragraphStyle] = listParagraphStyle(for: item, font: font)
+      }
+      textView.typingAttributes = attributes
+    }
+
+    private func listParagraphStyle(for item: SemanticListItem, font: UIFont) -> NSParagraphStyle {
+      let paragraph = NSMutableParagraphStyle()
+      paragraph.firstLineHeadIndent = 44 + CGFloat(item.depth) * 28
+      paragraph.headIndent = paragraph.firstLineHeadIndent
+      // Reserve checkbox hit-target space between paragraphs, not inside native text/caret lines.
+      let spacing = max(0, (44 - font.lineHeight) / 2)
+      paragraph.paragraphSpacingBefore = spacing
+      paragraph.paragraphSpacing = spacing
+      return paragraph
     }
 
     private func renderFormatting(in textView: UITextView) {
@@ -322,10 +344,10 @@ struct CollaborativeTextView: UIViewRepresentable {
           range: NSRange(location: mark.offset, length: mark.length))
       }
       for item in session.snapshot.listItems ?? [] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.firstLineHeadIndent = 44 + CGFloat(item.depth) * 28
-        paragraph.headIndent = paragraph.firstLineHeadIndent
-        paragraph.minimumLineHeight = 44
+        let font = item.offset < storage.length
+          ? storage.attribute(.font, at: item.offset, effectiveRange: nil) as? UIFont : nil
+        let paragraph = listParagraphStyle(for: item,
+          font: font ?? session.typingFormatting.font(compatibleWith: textView.traitCollection))
         // The joining LF, which the last paragraph lacks.
         storage.addAttribute(.paragraphStyle, value: paragraph,
           range: NSRange(location: item.offset, length: min(item.length + 1, storage.length - item.offset)))
@@ -381,7 +403,7 @@ struct CollaborativeTextView: UIViewRepresentable {
           marker = button
         } else {
           let label = (markers[item.id] as? UILabel) ?? UILabel()
-          label.text = item.kind == .ordered ? "\(orderedCounts[parent, default: 1])." : "•"
+          label.text = item.kind == .ordered ? "\(orderedCounts[parent, default: 1])." : "-"
           label.font = .preferredFont(forTextStyle: .body, compatibleWith: textView.traitCollection)
           label.textColor = .secondaryLabel
           label.textAlignment = .center
@@ -416,16 +438,23 @@ struct CollaborativeTextView: UIViewRepresentable {
           let position = textView.position(from: textView.beginningOfDocument, offset: item.offset)
         else { continue }
         let caret = textView.caretRect(for: position)
-        guard let location = content.location(content.documentRange.location, offsetBy: item.offset),
+        let font: UIFont
+        let baseline: CGFloat
+        if item.offset == textView.textStorage.length {
+          font = session.typingFormatting.font(compatibleWith: textView.traitCollection)
+          baseline = caret.minY - textView.textContainerInset.top + font.ascender
+        } else if let location = content.location(content.documentRange.location, offsetBy: item.offset),
           let fragment = manager.textLayoutFragment(for: location),
           let line = fragment.textLineFragments.first,
-          let font = textView.textStorage.attribute(.font, at: item.offset, effectiveRange: nil) as? UIFont
-        else {
+          let itemFont = textView.textStorage.attribute(.font, at: item.offset, effectiveRange: nil) as? UIFont
+        {
+          font = itemFont
+          baseline = fragment.layoutFragmentFrame.minY + line.typographicBounds.minY + line.glyphOrigin.y
+        } else {
           marker.isHidden = true
           continue
         }
         marker.isHidden = false
-        let baseline = fragment.layoutFragmentFrame.minY + line.typographicBounds.minY + line.glyphOrigin.y
         let origin = textView.convert(CGPoint(x: caret.minX - 44,
           y: baseline + textView.textContainerInset.top - font.capHeight / 2 - 22), to: container.markers)
         marker.frame = CGRect(origin: origin, size: CGSize(width: 44, height: 44))
