@@ -242,18 +242,23 @@ extension DocumentSession {
     }
     try performListEdit { transaction in
       for paragraph in paragraphs {
-        try setBlockField(.kind, of: paragraph.key, to: .string(kind.rawValue), transaction: transaction)
-        if paragraph.item == nil {
-          // An ordinary paragraph becomes a root item with a fresh identity.
-          try setBlockField(.parent, of: paragraph.key, to: nil, transaction: transaction)
-          try setBlockField(.id, of: paragraph.key, to: itemID.map(YValue.string), transaction: transaction)
-        }
-        if kind == .checklist, paragraph.item?.kind != .checklist {
-          try setBlockField(.checked, of: paragraph.key, to: .bool(false), transaction: transaction)
-        }
+        try setListKind(kind, of: paragraph, itemID: itemID, transaction: transaction)
       }
       try recordFeatures(["lists.\(kind.rawValue)@1"], in: transaction)
       return nil
+    }
+  }
+
+  private func setListKind(_ kind: ListKind, of paragraph: BlockProjection.Paragraph,
+    itemID: String? = nil, transaction: YWriteTransaction) throws {
+    try setBlockField(.kind, of: paragraph.key, to: .string(kind.rawValue), transaction: transaction)
+    if paragraph.item == nil {
+      // An ordinary paragraph becomes a root item with a fresh identity.
+      try setBlockField(.parent, of: paragraph.key, to: nil, transaction: transaction)
+      try setBlockField(.id, of: paragraph.key, to: itemID.map(YValue.string), transaction: transaction)
+    }
+    if kind == .checklist, paragraph.item?.kind != .checklist {
+      try setBlockField(.checked, of: paragraph.key, to: .bool(false), transaction: transaction)
     }
   }
 
@@ -384,6 +389,23 @@ extension DocumentSession {
   func handleListInput(in range: Range<Int>, replacement: String) throws -> Bool {
     guard !hasMarkedText else { return false }
     try validate(range)
+    if replacement == " ", plugins.lists?.unordered == true, range.isEmpty, range == selection,
+      let paragraph = projection.paragraph(containing: range.lowerBound), paragraph.item == nil,
+      range.lowerBound == paragraph.offset + 1, (text as NSString).character(at: paragraph.offset) == 45 {
+      let formatting = typingFormatting
+      // Commit the typed space first: undoing only the shortcut must restore literal "- ".
+      try performListEdit { transaction in
+        try replaceBlocks(in: range, with: " ", formatting: formatting, transaction: transaction)
+      }
+      try performListEdit { transaction in
+        let caret = try replaceBlocks(in: paragraph.offset..<(paragraph.offset + 2), with: "",
+          formatting: formatting, transaction: transaction)
+        try setListKind(.unordered, of: paragraph, transaction: transaction)
+        try recordFeatures(["lists.unordered@1"], in: transaction)
+        return caret
+      }
+      return true
+    }
     if replacement == "\n", snapshot.listItem(at: range.lowerBound) != nil {
       selection = range
       try insertReturn()

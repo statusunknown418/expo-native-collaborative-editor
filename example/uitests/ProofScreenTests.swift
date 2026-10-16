@@ -1,6 +1,36 @@
 import XCTest
 
 final class ProofScreenTests: XCTestCase {
+  func testTypingHyphenThenSpaceConvertsToListAndSupportsNativeUndoRedoAndContinuedTyping() {
+    let app = XCUIApplication()
+    app.launchArguments = ["-documentId", "hyphen-space-\(UUID().uuidString)"]
+    app.launch()
+    let editor = app.textViews["editing-surface"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 30))
+    editor.tap()
+    editor.typeText("-")
+    waitForValue("-", in: editor)
+    editor.typeText(" ")
+    waitForValue("", in: editor)
+    editor.tap(withNumberOfTaps: 2, numberOfTouches: 3)
+    waitForValue("- ", in: editor)
+    editor.tap() // Dismiss the system editing HUD covering the example's Redo button.
+    waitForEnabled(true, button: app.buttons["Redo"])
+    app.buttons["Redo"].tap()
+    waitForValue("", in: editor)
+    // The marker is decorative, so verify the consumed prefix through the native input value.
+    editor.typeText("Task\nNext")
+    waitForValue("Task\nNext", in: editor)
+    editor.typeText("\n\n")
+    waitForValue("Task\nNext\n", in: editor)
+    editor.typeText("Plain")
+    waitForValue("Task\nNext\nPlain", in: editor)
+    XCTAssertTrue(app.staticTexts["Saved on this phone"].waitForExistence(timeout: 10))
+    let screenshot = XCTAttachment(screenshot: app.screenshot())
+    screenshot.lifetime = .keepAlways
+    add(screenshot)
+  }
+
   func testMixedNestedListsNativeCheckboxesAndPersistence() {
     let app = XCUIApplication()
     app.launchArguments = ["-documentId", "lists-\(UUID().uuidString)"]

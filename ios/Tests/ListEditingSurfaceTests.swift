@@ -6,6 +6,200 @@ import XCTest
 
 @MainActor
 final class ListEditingSurfaceTests: XCTestCase {
+  func testNativeHyphenSpaceCreatesEmptyUnorderedItemForTypingAndUITextInputReplacement() throws {
+    for useReplacement in [false, true] {
+      let session = try makeSession()
+      let surface = ListSurface(session: session)
+      let view = surface.textView
+      view.insertText("-")
+      if useReplacement {
+        try replace(1..<1, in: view, with: " ")
+      } else {
+        view.insertText(" ")
+      }
+      XCTAssertEqual(session.text, "")
+      XCTAssertEqual(view.text, "")
+      XCTAssertEqual(view.selectedRange, NSRange(location: 0, length: 0))
+      XCTAssertEqual(session.selection, 0..<0)
+      let items = try XCTUnwrap(session.snapshot.listItems)
+      XCTAssertEqual(items.count, 1)
+      let item = try XCTUnwrap(items.first)
+      XCTAssertFalse(item.id.isEmpty)
+      XCTAssertEqual(item.kind, .unordered)
+      XCTAssertEqual(item.offset, 0)
+      XCTAssertEqual(item.length, 0)
+      XCTAssertEqual(item.depth, 0)
+      XCTAssertNil(item.parent)
+      surface.window.layoutIfNeeded()
+      XCTAssertEqual(surface.labels.map(\.text), ["-"])
+      view.insertText("Task")
+      XCTAssertEqual(session.text, "Task")
+      XCTAssertEqual(view.text, "Task")
+      XCTAssertEqual(session.snapshot.listItems?.map(\.id), [item.id])
+      XCTAssertEqual(view.selectedRange, NSRange(location: 4, length: 0))
+    }
+  }
+
+  func testNativeHyphenSpacePreservesMarkedSuffixCaretAndSelectiveUndoRedo() throws {
+    let session = try makeSession()
+    try session.setPlugins(FeaturePlugins(registrations: [
+      ["id": "lists", "capability": "lists", "version": 1, "options": [String: Any]()],
+      ["id": "formatting", "capability": "formatting", "version": 1, "options": [String: Any]()],
+    ]))
+    try session.replaceText(with: "Above\n-Tail\nAfter")
+    session.selection = 7..<11
+    try session.toggleBold()
+    try session.toggleItalic()
+    let surface = ListSurface(session: session)
+    let view = surface.textView
+    view.selectedRange = NSRange(location: 7, length: 0)
+    view.insertText(" ")
+    XCTAssertEqual(session.text, "Above\nTail\nAfter")
+    XCTAssertEqual(view.text, session.text)
+    XCTAssertEqual(view.selectedRange, NSRange(location: 6, length: 0))
+    let items = try XCTUnwrap(session.snapshot.listItems)
+    XCTAssertEqual(items.count, 1)
+    let item = try XCTUnwrap(items.first)
+    XCTAssertEqual(item.kind, .unordered)
+    XCTAssertEqual(item.offset, 6)
+    XCTAssertEqual(item.length, 4)
+    XCTAssertEqual(session.snapshot.marks, [
+      SemanticMark(offset: 6, length: 4, formatting: TextFormatting(bold: true, italic: true)),
+    ])
+    let font = try XCTUnwrap(view.textStorage.attribute(.font, at: 6, effectiveRange: nil) as? UIFont)
+    XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains([.traitBold, .traitItalic]))
+    let converted = session.snapshot
+    let undo = try XCTUnwrap(view.undoManager)
+    undo.undo()
+    XCTAssertEqual(session.text, "Above\n- Tail\nAfter")
+    XCTAssertEqual(view.text, session.text)
+    XCTAssertNil(session.snapshot.listItems)
+    XCTAssertEqual(session.snapshot.marks, [
+      SemanticMark(offset: 8, length: 4, formatting: TextFormatting(bold: true, italic: true)),
+    ])
+    undo.redo()
+    XCTAssertEqual(session.snapshot, converted)
+    XCTAssertEqual(view.text, "Above\nTail\nAfter")
+    XCTAssertEqual(view.selectedRange, NSRange(location: 6, length: 0))
+  }
+
+  func testConvertedItemUsesNativeReturnAndBackspaceRules() throws {
+    let session = try makeSession()
+    let surface = ListSurface(session: session)
+    let view = surface.textView
+    view.insertText("-")
+    view.insertText(" ")
+    let firstID = try XCTUnwrap(session.snapshot.listItems?.first?.id)
+    view.insertText("Task")
+    view.insertText("\n")
+    XCTAssertEqual(view.text, "Task\n")
+    let items = try XCTUnwrap(session.snapshot.listItems)
+    XCTAssertEqual(items.count, 2)
+    XCTAssertEqual(items[0].id, firstID)
+    XCTAssertNotEqual(items[1].id, firstID)
+    XCTAssertEqual(items.map(\.kind), [.unordered, .unordered])
+    XCTAssertEqual(view.selectedRange, NSRange(location: 5, length: 0))
+    view.insertText("\n")
+    XCTAssertEqual(session.text, "Task\n")
+    XCTAssertEqual(session.snapshot.listItems?.map(\.id), [firstID])
+    view.selectedRange = NSRange(location: 0, length: 0)
+    view.deleteBackward()
+    XCTAssertEqual(session.text, "Task\n")
+    XCTAssertEqual(view.text, session.text)
+    XCTAssertNil(session.snapshot.listItems)
+
+    let empty = try makeSession()
+    let emptySurface = ListSurface(session: empty)
+    emptySurface.textView.insertText("-")
+    emptySurface.textView.insertText(" ")
+    XCTAssertNotNil(empty.snapshot.listItems?.first)
+    emptySurface.textView.deleteBackward()
+    XCTAssertEqual(empty.text, "")
+    XCTAssertEqual(emptySurface.textView.text, "")
+    XCTAssertNil(empty.snapshot.listItems)
+    XCTAssertEqual(emptySurface.textView.selectedRange, NSRange(location: 0, length: 0))
+  }
+
+  func testNativeHyphenSpaceRemainsLiteralWithoutUnorderedAuthoring() throws {
+    for plugins in [
+      FeaturePlugins(),
+      try FeaturePlugins(registrations: [
+        ["id": "lists", "capability": "lists", "version": 1, "options": ["unordered": false]],
+      ]),
+    ] {
+      let session = try replica()
+      try session.setPlugins(plugins)
+      let surface = ListSurface(session: session)
+      surface.textView.insertText("-")
+      surface.textView.insertText(" ")
+      XCTAssertEqual(session.text, "- ")
+      XCTAssertEqual(surface.textView.text, "- ")
+      XCTAssertNil(session.snapshot.listItems)
+      XCTAssertEqual(surface.textView.selectedRange, NSRange(location: 2, length: 0))
+    }
+  }
+
+  func testNativeHyphenSpaceDoesNotConvertCompositionIncludingItsCommit() throws {
+    for commitWithInsertion in [false, true] {
+      let session = try makeSession()
+      let surface = ListSurface(session: session)
+      let view = surface.textView
+      view.insertText("-")
+      view.setMarkedText(" ", selectedRange: NSRange(location: 1, length: 0))
+      XCTAssertNotNil(view.markedTextRange)
+      XCTAssertEqual(view.text, "- ")
+      XCTAssertEqual(session.text, "-")
+      XCTAssertNil(session.snapshot.listItems)
+      if commitWithInsertion {
+        view.insertText(" ")
+      } else {
+        view.unmarkText()
+      }
+      XCTAssertNil(view.markedTextRange)
+      XCTAssertEqual(session.text, "- ")
+      XCTAssertEqual(view.text, "- ")
+      XCTAssertNil(session.snapshot.listItems)
+      XCTAssertEqual(view.selectedRange, NSRange(location: 2, length: 0))
+    }
+  }
+
+  func testNativeHyphenSpaceRejectsPasteOtherPrefixesSelectionsAndExistingItems() throws {
+    let cases: [(String, Range<Int>, String, String)] = [
+      ("", 0..<0, "- ", "- "),
+      ("a-", 2..<2, " ", "a- "),
+      ("--", 2..<2, " ", "-- "),
+      (" -", 2..<2, " ", " - "),
+      ("*", 1..<1, " ", "* "),
+      ("+", 1..<1, " ", "+ "),
+      ("1.", 2..<2, " ", "1. "),
+      ("–", 1..<1, " ", "– "),
+      ("-", 1..<1, "\u{00a0}", "-\u{00a0}"),
+      ("-X", 1..<2, " ", "- "),
+      ("- ", 0..<2, " ", " "),
+    ]
+    for (text, range, insertion, expected) in cases {
+      let session = try makeSession()
+      try session.replaceText(with: text)
+      let surface = ListSurface(session: session)
+      surface.textView.selectedRange = NSRange(range)
+      surface.textView.insertText(insertion)
+      XCTAssertEqual(session.text, expected, "Input: \(text.debugDescription)")
+      XCTAssertEqual(surface.textView.text, expected)
+      XCTAssertNil(session.snapshot.listItems)
+    }
+    for kind in ListKind.allCases {
+      let session = try makeSession()
+      try seed(session, [Line("existing", "-", kind)], trailingLF: false)
+      let surface = ListSurface(session: session)
+      surface.textView.selectedRange = NSRange(location: 1, length: 0)
+      surface.textView.insertText(" ")
+      XCTAssertEqual(session.text, "- ")
+      XCTAssertEqual(surface.textView.text, "- ")
+      XCTAssertEqual(session.snapshot.listItems?.map(\.id), ["existing"])
+      XCTAssertEqual(session.snapshot.listItems?.map(\.kind), [kind])
+    }
+  }
+
   func testUnorderedHyphensAndCaretMatchOrdinaryTextWithoutChangingDocumentOnRemount() throws {
     let session = try makeSession()
     try session.replaceText(with: "Added\nAdded")

@@ -391,6 +391,159 @@ final class ListTests: XCTestCase {
     XCTAssertEqual(Set(bullet.keys), ["id", "kind", "offset", "length", "depth"])
   }
 
+  func testHyphenSpaceCreatesEmptyItemWithSeparateConversionUndoAndStableRedoIdentity() throws {
+    let session = try replica()
+    try session.setPlugins(listsPlugins())
+    try session.replaceText(in: 0..<0, with: "-")
+    session.selection = 1..<1
+    XCTAssertTrue(try session.handleListInput(in: 1..<1, replacement: " "))
+    XCTAssertEqual(session.text, "")
+    let items = try XCTUnwrap(session.snapshot.listItems)
+    XCTAssertEqual(items.count, 1)
+    let item = try XCTUnwrap(items.first)
+    XCTAssertFalse(item.id.isEmpty)
+    XCTAssertEqual(item.kind, .unordered)
+    XCTAssertEqual(item.offset, 0)
+    XCTAssertEqual(item.length, 0)
+    XCTAssertEqual(item.depth, 0)
+    XCTAssertNil(item.parent)
+    XCTAssertEqual(session.selection, 0..<0)
+    let converted = session.snapshot
+    try session.undo()
+    XCTAssertEqual(session.text, "- ")
+    XCTAssertNil(session.snapshot.listItems)
+    try session.undo()
+    XCTAssertEqual(session.text, "-")
+    try session.undo()
+    XCTAssertEqual(session.text, "")
+    XCTAssertFalse(session.canUndo)
+    for _ in 0..<3 { try session.redo() }
+    XCTAssertEqual(session.snapshot, converted)
+    XCTAssertEqual(session.selection, 0..<0)
+  }
+
+  func testHyphenSpacePreservesMarkedSuffixAndSurroundingParagraphs() throws {
+    let session = try replica()
+    try session.setPlugins(FeaturePlugins(registrations: [listsRegistration(), formattingRegistration()]))
+    try session.replaceText(with: "Before\nSuffix👍🏽\nAfter")
+    session.selection = 7..<17
+    try session.toggleBold()
+    session.selection = 13..<17
+    try session.toggleItalic()
+    let originalMarks = session.snapshot.marks
+    session.selection = 7..<7
+    try session.replaceText(in: 7..<7, with: "-")
+    session.selection = 8..<8
+    XCTAssertTrue(try session.handleListInput(in: 8..<8, replacement: " "))
+    XCTAssertEqual(session.text, "Before\nSuffix👍🏽\nAfter")
+    XCTAssertEqual(session.snapshot.marks, originalMarks)
+    XCTAssertEqual(session.selection, 7..<7)
+    XCTAssertEqual(session.snapshot.listItems?.map(\.kind), [.unordered])
+    XCTAssertEqual(session.snapshot.listItems?.first?.offset, 7)
+    XCTAssertEqual(session.snapshot.listItems?.first?.length, 10)
+    let converted = session.snapshot
+    try session.undo()
+    XCTAssertEqual(session.text, "Before\n- Suffix👍🏽\nAfter")
+    XCTAssertNil(session.snapshot.listItems)
+    XCTAssertTrue(session.snapshot.formatting(at: 9).bold)
+    XCTAssertTrue(session.snapshot.formatting(at: 15).italic)
+    try session.redo()
+    XCTAssertEqual(session.snapshot, converted)
+  }
+
+  func testHyphenSpaceRecognitionRequiresExactCollapsedUnmarkedEnabledInput() throws {
+    let cases: [(String, Range<Int>, Range<Int>, String)] = [
+      ("x-", 2..<2, 2..<2, " "), ("--", 2..<2, 2..<2, " "),
+      (" -", 2..<2, 2..<2, " "), ("*", 1..<1, 1..<1, " "),
+      ("+", 1..<1, 1..<1, " "), ("–", 1..<1, 1..<1, " "),
+      ("-", 1..<1, 1..<1, "\u{a0}"), ("-", 1..<1, 1..<1, "  "),
+      ("", 0..<0, 0..<0, "- "), ("-", 0..<1, 1..<1, " "),
+      ("-x", 1..<2, 1..<2, " "), ("-x", 1..<1, 2..<2, " "),
+    ]
+    for (text, selection, range, replacement) in cases {
+      let session = try replica()
+      try session.setPlugins(listsPlugins())
+      try session.replaceText(with: text)
+      session.selection = selection
+      let before = session.snapshot
+      XCTAssertFalse(try session.handleListInput(in: range, replacement: replacement), "\(text.debugDescription)")
+      XCTAssertEqual(session.snapshot, before)
+      XCTAssertEqual(session.selection, selection)
+    }
+    for plugins in [FeaturePlugins(), try listsPlugins(options: ["unordered": false])] {
+      let session = try replica()
+      try session.setPlugins(plugins)
+      try session.replaceText(with: "-")
+      session.selection = 1..<1
+      XCTAssertFalse(try session.handleListInput(in: 1..<1, replacement: " "))
+      try session.replaceText(in: 1..<1, with: " ")
+      XCTAssertEqual(session.text, "- ")
+      XCTAssertNil(session.snapshot.listItems)
+    }
+    let session = try replica()
+    try session.setPlugins(listsPlugins())
+    try session.replaceText(with: "-")
+    session.selection = 1..<1
+    session.hasMarkedText = true
+    XCTAssertFalse(try session.handleListInput(in: 1..<1, replacement: " "))
+    XCTAssertEqual(session.text, "-")
+    XCTAssertNil(session.snapshot.listItems)
+    session.hasMarkedText = false
+    try session.setListKind(.unordered)
+    let existing = session.snapshot
+    XCTAssertFalse(try session.handleListInput(in: 1..<1, replacement: " "))
+    XCTAssertEqual(session.snapshot, existing)
+  }
+
+  func testHyphenSpacePersistsAndDeliversToDisabledReplicaWithSelectiveUndo() throws {
+    let urls = [temporaryStoreURL(), temporaryStoreURL()]
+    let local = try replica(at: urls[0], clientID: 1)
+    let remote = try replica(at: urls[1], clientID: 2)
+    try local.setPlugins(listsPlugins())
+    try remote.setPlugins(listsPlugins(options: ["unordered": false]))
+    let harness = DeliveryHarness(seed: 22, faults: .unreliable)
+    for session in [local, remote] { try harness.connect(session) }
+    try local.replaceText(with: "Tail\nOther")
+    try local.replaceText(in: 0..<0, with: "-")
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(remote.text, "-Tail\nOther")
+    XCTAssertNil(remote.snapshot.listItems, "delivery must not recognize prefixes")
+    let end = remote.text.utf16.count
+    try remote.replaceText(in: end..<end, with: "!")
+    local.selection = 1..<1
+    XCTAssertTrue(try local.handleListInput(in: 1..<1, replacement: " "))
+    XCTAssertFalse(local.isSavedOnThisPhone, "conversion must wait for durable commit")
+    waitUntil { local.isSavedOnThisPhone && remote.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(local.text, "Tail\nOther!")
+    XCTAssertEqual(remote.snapshot, local.snapshot)
+    let converted = local.snapshot
+    try local.undo()
+    XCTAssertEqual(local.text, "- Tail\nOther!")
+    XCTAssertNil(local.snapshot.listItems)
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    XCTAssertEqual(remote.snapshot, local.snapshot)
+    let literal = try replica(at: urls[0])
+    try literal.setPlugins(listsPlugins())
+    XCTAssertEqual(literal.text, "- Tail\nOther!")
+    XCTAssertNil(literal.snapshot.listItems, "opening must not recognize prefixes")
+    try local.redo()
+    XCTAssertEqual(local.snapshot, converted)
+    waitUntil { local.isSavedOnThisPhone }
+    try harness.runUntilIdle()
+    harness.redeliverEverything()
+    try harness.runUntilIdle()
+    for (index, session) in [local, remote].enumerated() {
+      XCTAssertEqual(session.snapshot, converted)
+      XCTAssertFalse(session.hasPendingSynchronization)
+      let reopened = try replica(at: urls[index])
+      XCTAssertEqual(reopened.snapshot, converted)
+      XCTAssertFalse(reopened.hasPendingSynchronization)
+    }
+  }
+
   func testOrdinaryReturnAndGraphemeBackspaceAndInputInterception() throws {
     let session = try replica()
     try session.replaceText(with: "A👨‍👩‍👧‍👦e\u{301}")
