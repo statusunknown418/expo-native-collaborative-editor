@@ -100,6 +100,86 @@ final class ConcurrentListTests: XCTestCase {
     XCTAssertEqual(try item("empty", in: result).length, 5)
   }
 
+  func testChecklistCascadeConvergesWithoutCapturingConcurrentChildrenOrUndoingRemoteEdits() throws {
+    let urls = (0..<3).map { _ in temporaryStoreURL() }
+    let remote = try listReplica([
+      ("Parent", .checklist, "parent", 0), ("Branch", .unordered, "branch", 1),
+      ("Step", .ordered, "step", 2), ("Deep", .checklist, "deep", 3),
+      ("Done", .checklist, "done", 1), ("Move", .unordered, "move", 1),
+      ("Leaf", .checklist, "leaf", 2), ("Outside", .checklist, "outside", 0),
+    ], at: urls[0], clientID: 1)
+    try remote.setPlugins(listsPlugins())
+    try remote.toggleChecklistItem("done")
+    let local = try replica(at: urls[1], clientID: 2)
+    let observer = try replica(at: urls[2], clientID: 3)
+    for session in [local, observer] {
+      try session.setPlugins(listsPlugins(options: ["caution__enableChecklistChildrenAutoCompletion": true]))
+    }
+    let replicas = [remote, local, observer]
+    let harness = DeliveryHarness(seed: 11, faults: .unreliable)
+    waitUntil { replicas.allSatisfy(\.isSavedOnThisPhone) }
+    for session in replicas { try harness.connect(session) }
+    try harness.runUntilIdle()
+    for session in replicas { XCTAssertEqual(session.snapshot, remote.snapshot) }
+    XCTAssertFalse(local.canUndo, "the shared hierarchy is remote history on the cascade author")
+
+    // No delivery ticks occur between these edits: the enabled observer knows New before receiving
+    // the cascade, but the cascade author does not. The disabled replica concurrently moves a
+    // subtree whose leaf is being checked and edits text beneath the mixed-kind branch.
+    try local.toggleChecklistItem("parent")
+    observer.selection = caret(after: "Deep", in: observer.text)
+    try observer.insertReturn()
+    try observer.replaceText(in: observer.selection, with: "New")
+    XCTAssertTrue(outline(observer.snapshot).contains("      [ ] New"))
+    XCTAssertFalse(local.text.contains("New"))
+    XCTAssertEqual(try item("parent", in: local).checked, true)
+    XCTAssertEqual(try item("parent", in: observer).checked, false)
+    try select("move", in: remote)
+    try remote.outdentListItem()
+    try remote.replaceText(in: caret(after: "Deep", in: remote.text), with: " edited")
+
+    let checked = [
+      "[x] Parent", "  - Branch", "    1. Step", "      [x] Deep edited", "      [ ] New",
+      "  [x] Done", "- Move", "  [x] Leaf", "[ ] Outside",
+    ]
+    let undone = [
+      "[ ] Parent", "  - Branch", "    1. Step", "      [ ] Deep edited", "      [ ] New",
+      "  [x] Done", "- Move", "  [ ] Leaf", "[ ] Outside",
+    ]
+    func assertConverged(_ expected: [String]) throws {
+      waitUntil { replicas.allSatisfy(\.isSavedOnThisPhone) }
+      try harness.runUntilIdle()
+      for session in replicas {
+        XCTAssertEqual(outline(session.snapshot), expected)
+        XCTAssertEqual(session.snapshot, local.snapshot)
+        XCTAssertFalse(session.hasPendingSynchronization, "all durable receipts have arrived")
+        assertValidHierarchy(session.snapshot)
+      }
+    }
+    try assertConverged(checked)
+
+    // A single selective undo restores the known checklist states, including the prechecked Done,
+    // without removing the remote child, text edit, or subtree placement.
+    try local.undo()
+    XCTAssertFalse(local.canUndo)
+    XCTAssertTrue(local.canRedo)
+    try assertConverged(undone)
+    try local.redo()
+    XCTAssertTrue(local.canUndo)
+    XCTAssertFalse(local.canRedo)
+    try assertConverged(checked)
+
+    harness.redeliverEverything()
+    try assertConverged(checked)
+    for url in urls {
+      let reopened = try replica(at: url)
+      XCTAssertEqual(outline(reopened.snapshot), checked)
+      XCTAssertEqual(reopened.snapshot, local.snapshot)
+      XCTAssertTrue(reopened.isSavedOnThisPhone)
+      XCTAssertFalse(reopened.hasPendingSynchronization)
+    }
+  }
+
   /// G3: three replicas start from `nested` and make random concurrent text, mark, list-structure, and
   /// checklist edits through an unreliable harness, with recorded seeds.
   func testSeededConcurrentStructureTextMarksAndChecklistsConverge() throws {

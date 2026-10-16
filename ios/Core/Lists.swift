@@ -372,15 +372,20 @@ extension DocumentSession {
 
   func toggleChecklistItem(_ id: String) throws {
     try requireListCommand()
-    guard let item = snapshot.listItems?.first(where: { $0.id == id }), item.kind == .checklist else { return }
+    guard let index = projection.paragraphs.firstIndex(where: { $0.item?.id == id }),
+      let item = projection.paragraphs[index].item, item.kind == .checklist else { return }
     let checked = item.checked != true
-    // Disabled means no descendant traversal, not a traversal followed by discarded edits.
-    let targets = plugins.lists?.caution__enableChecklistChildrenAutoCompletion == true
-      ? snapshot.listSubtree(of: item).filter { $0.kind == .checklist } : [item]
     try performListEdit { transaction in
-      for target in targets {
-        guard let paragraph = projection.paragraph(item: target.id) else { continue }
-        try setBlockField(.checked, of: paragraph.key, to: .bool(checked), transaction: transaction)
+      try setBlockField(.checked, of: projection.paragraphs[index].key, to: .bool(checked), transaction: transaction)
+      // Disabled means no descendant traversal. Preorder lets enabled cascades scan the subtree
+      // directly, without allocating target arrays or looking up every descendant by ID.
+      if plugins.lists?.caution__enableChecklistChildrenAutoCompletion == true {
+        for paragraph in projection.paragraphs[(index + 1)...] {
+          guard let descendant = paragraph.item, descendant.depth > item.depth else { break }
+          if descendant.kind == .checklist {
+            try setBlockField(.checked, of: paragraph.key, to: .bool(checked), transaction: transaction)
+          }
+        }
       }
       return nil
     }

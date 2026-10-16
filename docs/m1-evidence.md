@@ -281,3 +281,39 @@ The 44-point list `minimumLineHeight` also enlarged TextKit's insertion caret: t
 Visual smoke drove the actual Release example: type `Added\nAdded`, select both paragraphs, convert to unordered, then place the caret at the end of each item. Both inspected screenshots show ASCII hyphens beside their text and a font-sized caret confined to the active item. Captured in `/tmp/issue21-example-visual.xcresult`; exported screenshots in `/tmp/issue21-example-visual/`. The throwaway UI probe was removed after capture. All native/UI commands used only existing iOS 26.2 simulator `ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF`, with parallel testing disabled and one destination.
 
 Final verification: 86/86 native tests, 8/8 Release UI tests, and 20/20 JavaScript fixture cases pass. Module build, lint, and root/example/fixture typechecks pass. Standards and spec reviews found no actionable defects. Result bundles: `/tmp/issue21-native-full.xcresult` and `/tmp/issue21-ui-full.xcresult`.
+
+## Checklist cascades (G5, #11)
+
+The cascade option and basic two-item implementation already existed from #9. #11 adds the missing mixed-list, persistence, concurrency, and real-example proof. A performance probe exposed an avoidable full paragraph lookup per descendant. `toggleChecklistItem` now walks the projected preorder directly, stops at the subtree boundary, and allocates no target arrays. The default-off branch does not visit descendants for cascade work. Transactions, update encoding, schema, and the JavaScript plugin API are unchanged.
+
+### Behavior and native surface
+
+- `ListPluginTests` checks independent default/disabled-plugin toggles and a cascade beneath an unchecked checklist ancestor, through ordered and unordered groups to depth 3. Checking and unchecking affect only the selected subtree; a prechecked descendant, sibling, and outside item keep the expected states. Enabling the option writes nothing. Checklist creation can be disabled while existing items still cascade.
+- A suspended storage queue keeps the cascade's saved-state publication at `[true, false]`; resuming produces `[true, false, true]` and exactly one additional outbox operation. Reopening with the option enabled restores the committed snapshot and identical pending operations without cascading again. One undo restores every prior checked state; redo and earlier undo history survive option changes.
+- `ConcurrentListTests.testChecklistCascadeConvergesWithoutCapturingConcurrentChildrenOrUndoingRemoteEdits` uses three fixed-client-ID replicas, mixed option values, and unreliable harness seed 11. A cascade races with an inserted child, a subtree outdent, and a text edit. The enabled receiver already knows the new child when the cascade arrives, but does not check it. All replicas agree on the literal expected hierarchy; a single selective undo/redo preserves the remote child, text, and placement. Redelivery is idempotent; all three reopened stores agree and have no pending synchronization after receipts. The accepted causal-feed contract in ADR 0007 still applies.
+- The actual Release example's `ProofScreenTests.testMixedNestedListsNativeCheckboxCascadesRuntimeOptionsAndPersistence` exercises native checkbox taps through the host's runtime `Checklist cascade` control. It verifies default independence, no action on enablement, check/uncheck cascades, one-step undo/redo after option changes, preservation of formatting configuration, later-child independence, remount, and process relaunch. The inspected screenshot shows checked `Parent` and `Task`, unchecked `Later` beneath ordered/unordered groups, cascade On, and formatting disabled, with the native keyboard/caret still active.
+
+Targeted native run: four behavior tests and the temporary timing probe passed in `/tmp/issue11-cascade-targeted.xcresult`. Release surface smoke: 1/1 passed in `/tmp/issue11-ui-smoke.xcresult`; retained screenshot exported to `/tmp/issue11-ui-smoke-images/`. Commands used the existing iOS 26.2 / iPhone 17 simulator `ACB21CAA-329B-45B3-AE1C-B62FDC03F8BF` (`ExpoNativeNotesModule`), Xcode 27.0, with parallel testing disabled and one destination. Reproduce behavior with the documented native unit suite and the Release UI selector above.
+
+### Large-subtree simulator timings
+
+Debug unit-test configuration, macOS arm64, same pinned simulator; no editing surface mounted. Each document contains a root checklist and 100, 1,000, or 5,000 direct checklist descendants, each with text `Task`. Setup creates the text/list items and assigns their parent before timing. Each option value gets one discarded warm-up toggle, then five alternating check/uncheck samples, waiting for durable saved state after each action. Timers use `ProcessInfo.processInfo.systemUptime`; saved latency includes main-run-loop delivery, not just SQLite commit time. Values below are medians in milliseconds.
+
+| Descendants | Cascade | Before: command return | After: command return | After: saved acknowledgement |
+| --- | --- | --- | --- | --- |
+| 100 | Off | 3.27 | 3.80 | 5.42 |
+| 100 | On | 5.42 | 5.35 | 6.75 |
+| 1,000 | Off | 30.21 | 25.10 | 25.79 |
+| 1,000 | On | 282.25 | 107.46 | 108.28 |
+| 5,000 | Off | 780.06 | 142.66 | 142.72 |
+| 5,000 | On | 11,341.90 | 2,060.07 | 2,060.14 |
+
+The original 5,000-descendant enabled samples ranged from 6,064.33 to 18,835.50 ms; the direct-scan samples ranged from 2,042.02 to 2,075.42 ms. The runs are noisy workstation observations, not a controlled speedup claim; even the Off path varied substantially between runs. Only the descendant-selection loop is now linear in the subtree; the complete command still includes engine writes, undo capture, whole-document projection, and selection publication on the main actor. The 5,000-descendant result still stalls that actor for about two seconds in Debug. This is not a Release/device latency pass or an accepted size limit. Device measurements and foundation acceptance remain #18.
+
+The temporary `testCascadeTimingProbe` was removed after capture. Result bundles: `/tmp/issue11-timing-before.xcresult` and `/tmp/issue11-cascade-targeted.xcresult`. Exported diagnostics (`StandardOutputAndStandardError.txt`, `CASCADE_TIMING` JSON records) are in `/tmp/issue11-timing-before-logs/` and `/tmp/issue11-timing-after-logs/`.
+
+### Final verification
+
+Full native suite: **97/97 passed** (`/tmp/issue11-native-full.xcresult`). Full Release example UI suite: **9/9 passed** (`/tmp/issue11-ui-full.xcresult`). Bun/Yjs fixtures: **20/20 passed**. Module build, lint, and root/example/fixture typechecks passed. After strengthening the reopen assertion to compare against operations captured before opening, the affected durability test passed again (`/tmp/issue11-reopen-invariant.xcresult`).
+
+Independent standards and spec reviews found no actionable defects. The standards reviewer noted only that the pre-existing `formattingValue` helper now also supplies the cascade control's On/Off accessibility value; it is reused unchanged. No simulator or test clone was created. Physical-device performance, access-state extensions (#14), and the final M1 foundation acceptance remain outside this ticket.

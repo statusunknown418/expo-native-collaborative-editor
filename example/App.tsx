@@ -60,6 +60,7 @@ function ProofScreen({ session }: { session: DocumentSession }) {
   const [nextRemoteEdit, setNextRemoteEdit] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [formattingEnabled, setFormattingEnabled] = useState(true);
+  const [checklistCascadeEnabled, setChecklistCascadeEnabled] = useState(false);
 
   const runCommand = useCallback(async (command: () => Promise<void>) => {
     setError(null);
@@ -106,14 +107,24 @@ function ProofScreen({ session }: { session: DocumentSession }) {
   const handleToggleFormatting = useCallback(
     () =>
       runCommand(async () => {
-        await session.setPlugins(
-          formattingEnabled
-            ? [listsPlugin()]
-            : [formattingPlugin({ headingLevels: [1, 2, 3] }), listsPlugin()]
-        );
+        await session.setPlugins([
+          ...(formattingEnabled ? [] : [formattingPlugin({ headingLevels: [1, 2, 3] })]),
+          listsPlugin({ caution__enableChecklistChildrenAutoCompletion: checklistCascadeEnabled }),
+        ]);
         setFormattingEnabled(!formattingEnabled);
       }),
-    [formattingEnabled, runCommand, session]
+    [checklistCascadeEnabled, formattingEnabled, runCommand, session]
+  );
+  const handleToggleChecklistCascade = useCallback(
+    () =>
+      runCommand(async () => {
+        await session.setPlugins([
+          ...(formattingEnabled ? [formattingPlugin({ headingLevels: [1, 2, 3] })] : []),
+          listsPlugin({ caution__enableChecklistChildrenAutoCompletion: !checklistCascadeEnabled }),
+        ]);
+        setChecklistCascadeEnabled(!checklistCascadeEnabled);
+      }),
+    [checklistCascadeEnabled, formattingEnabled, runCommand, session]
   );
   const handleOrderedList = useCallback(
     () => runCommand(() => session.setListKind('ordered')),
@@ -203,6 +214,14 @@ function ProofScreen({ session }: { session: DocumentSession }) {
         <Button
           label={formattingEnabled ? 'Disable formatting' : 'Enable formatting'}
           onPress={handleToggleFormatting}
+        />
+        <Button
+          label="Checklist cascade"
+          modifiers={[
+            buttonStyle(checklistCascadeEnabled ? 'borderedProminent' : 'bordered'),
+            accessibilityValue(formattingValue(checklistCascadeEnabled)),
+          ]}
+          onPress={handleToggleChecklistCascade}
         />
         <Spacer />
       </HStack>

@@ -217,7 +217,21 @@ With unordered authoring enabled, inserting one unmarked ASCII space at a collap
 
 `ListTests` covers recognition boundaries, attributed suffixes, earlier undo history, restart, and unreliable delivery with unrelated remote edits. `ListEditingSurfaceTests` drives native `insertText`, `UITextInput.replace`, composition, undo/redo, continued typing, Return, and Backspace. The example's `ProofScreenTests.testTypingHyphenThenSpaceConvertsToListAndSupportsNativeUndoRedoAndContinuedTyping` exercises the same shortcut through the on-screen editor.
 
-The opt-in `caution__enableChecklistChildrenAutoCompletion` action sets the tapped checklist item and its currently known checklist descendants to the same checked state in one undoable transaction. It never derives parent state from children, runs on open/remote delivery, or imposes a rule on later children. With the option disabled, toggling does no descendant traversal.
+The opt-in `caution__enableChecklistChildrenAutoCompletion` action sets the tapped checklist item and all its currently known checklist descendants, including those beneath ordered/unordered groups, to the same checked state in one undoable, durable transaction. It never rolls state upward or runs on open, option enablement, remote delivery, or later child insertion. Receiving replicas apply the concrete edits without rerunning the cascade, regardless of their own option. With the option disabled, toggling does no descendant traversal; the ordinary document projection still runs.
+
+```ts
+await session.setPlugins([
+  // Retain any other feature registrations the host still wants.
+  listsPlugin({
+    checklist: false, // Disable creation, not existing checkbox actions.
+    caution__enableChecklistChildrenAutoCompletion: true,
+  }),
+]);
+```
+
+Changing the option preserves content and undo/redo history. Existing checklists remain toggleable with checklist creation disabled, using the current cascade option; unregistering the lists plugin restores independent toggles. Configuration is host-local, not synchronized document state.
+
+The example's **Checklist cascade** button starts Off and changes this option at runtime. Its formatting toggle preserves the cascade option, and changing the cascade option preserves formatting registration. The Release example scenario checks independent states, cascades, single-action undo/redo across option changes, later-child independence, remount, and relaunch. Native durability/convergence proof and simulator timings: [`m1-evidence.md`](m1-evidence.md#checklist-cascades-g5-11). Physical-iPhone timings remain with #18.
 
 The explicit block model ([ADR 0008](adr/0008-explicit-block-document-model.md)) stores every paragraph as a block: `YText body` holds the text, each block after the first starting with an LF labeled `block: <key>`; the `blocks` map holds `<key>/kind`, `/id`, `/parent`, `/checked`, and `/removed`; the `order` array holds sibling order. Structural commands change only those properties, so concurrent edits inside a moved item move with it; Return inserts one labeled LF and never copies text. Removed items keep their properties and position, so their children, including ones added concurrently, are promoted in place. The projection to display paragraphs is deterministic and never writes: cycles, missing parents, reused identities, and unknown kinds project the same way in Swift and JavaScript.
 
